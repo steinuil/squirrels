@@ -25,9 +25,9 @@
             clippy
             lldb
             rustfmt
-
-            libclang
           ];
+
+          LIBCLANG_PATH = pkgs.lib.makeLibraryPath [ pkgs.llvmPackages.libclang ];
         };
       }
     );
