@@ -1,0 +1,8 @@
+[package]
+name = "squirrels"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+squirrels-sys = { version = "0.1.0", path = "../squirrels-sys" }
+thiserror = "2.0.18"
