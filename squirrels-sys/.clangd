@@ -1,0 +1,4 @@
+CompileFlags:
+  Add:
+    - -isystem
+    - squirrel-3.2/include

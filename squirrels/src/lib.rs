@@ -45,15 +45,40 @@ pub struct Squirrel {
 unsafe impl Send for Squirrel {}
 
 impl Squirrel {
+    /// Initialize a new Squirrel VM.
+    ///
+    /// `initial_stack_size` controls the size of the stack in slots,
+    /// or number of objects.
     pub fn new(initial_stack_size: usize) -> Self {
         let vm = unsafe { sq_open(initial_stack_size as _) };
         compiler_error_handler::register_vm(vm);
+        squirrels_sys::install_print_shims(vm);
         Self { vm }
+    }
+
+    /// Set the print function of the virtual machine.
+    ///
+    /// This function is used by the builtin function `::print()`
+    /// to output text.
+    pub fn set_print_fn<F>(&self, f: F)
+    where
+        F: Fn(&str) + Send + Sync + 'static,
+    {
+        squirrels_sys::set_print_fn(self.vm, f);
+    }
+
+    /// Set the print error function of the virtual machine.
+    pub fn set_eprint_fn<F>(&self, f: F)
+    where
+        F: Fn(&str) + Send + Sync + 'static,
+    {
+        squirrels_sys::set_error_fn(self.vm, f);
     }
 }
 
 impl Drop for Squirrel {
     fn drop(&mut self) {
+        squirrels_sys::clear_print_fns(self.vm);
         unsafe {
             sq_close(self.vm);
         }
@@ -151,6 +176,24 @@ fn arithmetic_float_test() {
 
     let val = Float::from_top(&sq).unwrap();
     assert_eq!(val, 6.0)
+}
+
+#[test]
+fn print_fn_test() {
+    use std::sync::{Arc, Mutex};
+
+    let str = Arc::new(Mutex::new("".to_string()));
+
+    let sq = Squirrel::new(1024);
+    sq.set_print_fn({
+        let str = str.clone();
+        move |s: &str| *str.lock().unwrap() = s.to_string()
+    });
+    sq.exec("print(\"hello\")").unwrap();
+
+    let s = str.lock().unwrap().to_string();
+
+    assert_eq!(&s, "hello")
 }
 
 pub trait FromSquirrel: Sized {

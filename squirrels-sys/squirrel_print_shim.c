@@ -1,19 +1,15 @@
+#include <squirrel.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <squirrel.h>
 
-typedef void (*ffi_sq_print_fn)(HSQUIRRELVM v, const SQChar *msg);
+extern void squirrels_dispatch_print(HSQUIRRELVM v, const SQChar *msg);
+extern void squirrels_dispatch_error(HSQUIRRELVM v, const SQChar *msg);
 
-extern ffi_sq_print_fn ffi_sq_get_print(HSQUIRRELVM v);
-extern ffi_sq_print_fn ffi_sq_get_error(HSQUIRRELVM v);
+typedef void (*dispatch_fn)(HSQUIRRELVM v, const SQChar *msg);
 
-static void print_dispatch(
-  HSQUIRRELVM v,
-  ffi_sq_print_fn cb,
-  const SQChar *fmt,
-  va_list ap
-) {
+static void print_dispatch(HSQUIRRELVM v, dispatch_fn cb, const SQChar *fmt,
+                           va_list ap) {
   char small_buf[1024];
   va_list copy;
   va_copy(copy, ap);
@@ -39,26 +35,16 @@ static void print_dispatch(
   va_end(copy);
 }
 
-void sq_shim_print(HSQUIRRELVM v, const SQChar *fmt, ...) {
-  ffi_sq_print_fn cb = ffi_sq_get_print(v);
-  if (!cb) {
-    return;
-  }
-
+void squirrels_shim_print(HSQUIRRELVM v, const SQChar *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  print_dispatch(v, cb, fmt, ap);
+  print_dispatch(v, squirrels_dispatch_print, fmt, ap);
   va_end(ap);
 }
 
-void sq_shim_error(HSQUIRRELVM v, const SQChar *fmt, ...) {
-  ffi_sq_print_fn cb = ffi_sq_get_error(v);
-  if (!cb) {
-    return;
-  }
-
+void squirrels_shim_error(HSQUIRRELVM v, const SQChar *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  print_dispatch(v, cb, fmt, ap);
+  print_dispatch(v, squirrels_dispatch_error, fmt, ap);
   va_end(ap);
 }

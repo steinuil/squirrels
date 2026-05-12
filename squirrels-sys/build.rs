@@ -1,11 +1,10 @@
 use std::{env, path::PathBuf};
 
 fn main() {
-    let mut cfg = cc::Build::new();
-
     let dst = PathBuf::from(env::var_os("OUT_DIR").unwrap());
 
-    cfg.cpp(true)
+    cc::Build::new()
+        .cpp(true)
         .include("squirrel-3.2/include")
         .include("squirrel-3.2/squirrel")
         .flag("-fno-rtti")
@@ -27,10 +26,15 @@ fn main() {
             "squirrel-3.2/squirrel/sqstate.cpp",
             "squirrel-3.2/squirrel/sqtable.cpp",
             "squirrel-3.2/squirrel/sqvm.cpp",
-            "squirrel_print_shim.c",
         ])
         .out_dir(dst.join("lib"))
-        .compile("squirrel.a");
+        .compile("squirrel");
+
+    cc::Build::new()
+        .include("squirrel-3.2/include")
+        .file("squirrel_print_shim.c")
+        .out_dir(dst.join("lib"))
+        .compile("squirrel_shim");
 
     bindgen::Builder::default()
         .header("squirrel-3.2/include/squirrel.h")
