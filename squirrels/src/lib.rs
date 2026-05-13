@@ -5,9 +5,9 @@ use std::ffi::{CStr, c_char};
 use squirrels_sys::{
     HSQOBJECT, HSQUIRRELVM, SQ_VMSTATE_IDLE, SQ_VMSTATE_RUNNING, SQ_VMSTATE_SUSPENDED, SQBool,
     SQChar, SQFalse, SQFloat, SQInteger, SQTrue, sq_addref, sq_call, sq_close, sq_compilebuffer,
-    sq_getbool, sq_getfloat, sq_getinteger, sq_getstackobj, sq_getstringandsize, sq_gettop,
-    sq_getvmstate, sq_open, sq_pop, sq_push, sq_pushobject, sq_pushroottable, sq_release,
-    sq_resetobject, tagSQObjectType_OT_STRING,
+    sq_getbool, sq_getfloat, sq_getinteger, sq_getrefcount, sq_getstackobj, sq_getstringandsize,
+    sq_gettop, sq_getvmstate, sq_open, sq_pop, sq_push, sq_pushobject, sq_pushroottable,
+    sq_release, sq_resetobject, tagSQObjectType_OT_STRING,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -200,6 +200,7 @@ fn assert_valid_stack_idx(vm: HSQUIRRELVM, idx: SQInteger) {
     assert!(valid, "invalid stack index {idx} (top={top})")
 }
 
+/// A handle to a Squirrel ref-counted object.
 pub struct ObjectHandle<'vm> {
     vm: &'vm Squirrel,
     obj: HSQOBJECT,
@@ -225,6 +226,12 @@ impl<'vm> ObjectHandle<'vm> {
 
     pub(crate) fn push(&self) {
         unsafe { sq_pushobject(self.vm.vm, self.obj) };
+    }
+
+    /// Get the ref count of this object.
+    pub fn ref_count(&self) -> u64 {
+        let mut obj = self.obj;
+        unsafe { sq_getrefcount(self.vm.vm, &mut obj) }
     }
 }
 
