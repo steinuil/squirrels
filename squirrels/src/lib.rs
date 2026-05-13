@@ -261,11 +261,11 @@ impl<'vm> SqString<'vm> {
         })
     }
 
-    pub fn as_bytes(&self) -> &'vm [u8] {
+    pub fn as_bytes(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.ptr as *const u8, self.len) }
     }
 
-    pub fn to_str(&self) -> std::result::Result<&'vm str, std::str::Utf8Error> {
+    pub fn to_str(&self) -> std::result::Result<&str, std::str::Utf8Error> {
         std::str::from_utf8(self.as_bytes())
     }
 }
@@ -285,6 +285,8 @@ pub trait FromSquirrel<'vm>: Sized {
 
 impl FromSquirrel<'_> for bool {
     fn from_top(sq: &Squirrel) -> Result<Self> {
+        assert_valid_stack_idx(sq.vm, -1);
+
         let mut out: SQBool = 0;
         if unsafe { sq_getbool(sq.vm, -1, &mut out) }.is_error() {
             return Err(Error::Type { expected: "bool" });
@@ -295,6 +297,8 @@ impl FromSquirrel<'_> for bool {
 
 impl FromSquirrel<'_> for Integer {
     fn from_top(sq: &Squirrel) -> Result<Self> {
+        assert_valid_stack_idx(sq.vm, -1);
+
         let mut out: SQInteger = 0;
         if unsafe { sq_getinteger(sq.vm, -1, &mut out) }.is_error() {
             return Err(Error::Type {
@@ -307,6 +311,8 @@ impl FromSquirrel<'_> for Integer {
 
 impl FromSquirrel<'_> for Float {
     fn from_top(sq: &Squirrel) -> Result<Self> {
+        assert_valid_stack_idx(sq.vm, -1);
+
         let mut out: SQFloat = 0.0;
         if unsafe { sq_getfloat(sq.vm, -1, &mut out) }.is_error() {
             return Err(Error::Type { expected: "float" });
