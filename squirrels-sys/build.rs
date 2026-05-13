@@ -39,6 +39,7 @@ fn main() {
     bindgen::Builder::default()
         .header("squirrel-3.2/include/squirrel.h")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+        .blocklist_type("SQRESULT")
         .generate()
         .expect("Unable to generate bindings")
         .write_to_file(dst.join("bindings.rs"))

@@ -3,9 +3,11 @@ mod compiler_error_handler;
 use std::ffi::{CStr, c_char};
 
 use squirrels_sys::{
-    HSQUIRRELVM, SQ_VMSTATE_IDLE, SQ_VMSTATE_RUNNING, SQ_VMSTATE_SUSPENDED, SQBool, SQFalse,
-    SQFloat, SQInteger, SQTrue, sq_call, sq_close, sq_compilebuffer, sq_getbool, sq_getfloat,
-    sq_getinteger, sq_getvmstate, sq_open, sq_pop, sq_push, sq_pushroottable,
+    HSQOBJECT, HSQUIRRELVM, SQ_VMSTATE_IDLE, SQ_VMSTATE_RUNNING, SQ_VMSTATE_SUSPENDED, SQBool,
+    SQChar, SQFalse, SQFloat, SQInteger, SQTrue, sq_addref, sq_call, sq_close, sq_compilebuffer,
+    sq_getbool, sq_getfloat, sq_getinteger, sq_getstackobj, sq_getstringandsize, sq_gettop,
+    sq_getvmstate, sq_open, sq_pop, sq_push, sq_pushobject, sq_pushroottable, sq_release,
+    sq_resetobject, tagSQObjectType_OT_STRING,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -79,9 +81,7 @@ impl Squirrel {
 impl Drop for Squirrel {
     fn drop(&mut self) {
         squirrels_sys::clear_print_fns(self.vm);
-        unsafe {
-            sq_close(self.vm);
-        }
+        unsafe { sq_close(self.vm) };
         compiler_error_handler::unregister_vm(self.vm);
     }
 }
@@ -111,7 +111,7 @@ impl Squirrel {
             )
         };
 
-        if ret < 0 {
+        if ret.is_error() {
             let e = compiler_error_handler::take_error(self.vm)
                 .expect("sq_compilebuffer failed but no compile error was captured");
             Err(Error::Compile {
@@ -126,9 +126,7 @@ impl Squirrel {
     }
 
     pub fn exec(&self, src: &str) -> Result<()> {
-        unsafe {
-            sq_pushroottable(self.vm);
-        }
+        unsafe { sq_pushroottable(self.vm) };
 
         if let Err(e) = self.compile_str(src, c"=eval") {
             unsafe {
@@ -142,7 +140,7 @@ impl Squirrel {
         }
 
         let ret = unsafe { sq_call(self.vm, 1, SQTrue as _, SQFalse as _) };
-        if ret < 0 {
+        if ret.is_error() {
             unsafe {
                 sq_pop(self.vm, 2);
                 return Err(Error::Runtime);
@@ -196,24 +194,109 @@ fn print_fn_test() {
     assert_eq!(&s, "hello")
 }
 
-pub trait FromSquirrel: Sized {
-    fn from_top(sq: &Squirrel) -> Result<Self>;
+fn assert_valid_stack_idx(vm: HSQUIRRELVM, idx: SQInteger) {
+    let top = unsafe { sq_gettop(vm) };
+    let valid = idx != 0 && if idx > 0 { idx <= top } else { idx >= -top };
+    assert!(valid, "invalid stack index {idx} (top={top})")
 }
 
-impl FromSquirrel for bool {
+pub struct ObjectHandle<'vm> {
+    vm: &'vm Squirrel,
+    obj: HSQOBJECT,
+}
+
+impl<'vm> ObjectHandle<'vm> {
+    pub(crate) fn from_stack(sq: &'vm Squirrel, idx: SQInteger) -> Self {
+        assert_valid_stack_idx(sq.vm, idx);
+
+        // Initialize the object
+        let mut obj: HSQOBJECT = unsafe { std::mem::zeroed() };
+        unsafe { sq_resetobject(&mut obj) };
+
+        // Get it from the stack
+        let ret = unsafe { sq_getstackobj(sq.vm, idx, &mut obj) };
+        assert!(!ret.is_error(), "sq_getstackobj failed for idx {idx}");
+
+        // Increment the refcount
+        unsafe { sq_addref(sq.vm, &mut obj) };
+
+        Self { vm: sq, obj }
+    }
+
+    pub(crate) fn push(&self) {
+        unsafe { sq_pushobject(self.vm.vm, self.obj) };
+    }
+}
+
+impl Drop for ObjectHandle<'_> {
+    fn drop(&mut self) {
+        unsafe { sq_release(self.vm.vm, &mut self.obj) };
+    }
+}
+
+pub struct SqString<'vm> {
+    handle: ObjectHandle<'vm>,
+    ptr: *const SQChar,
+    len: usize,
+}
+
+impl<'vm> SqString<'vm> {
+    pub(crate) fn from_stack(sq: &'vm Squirrel, idx: SQInteger) -> Result<Self> {
+        let handle = ObjectHandle::from_stack(sq, idx);
+        if handle.obj._type != tagSQObjectType_OT_STRING {
+            return Err(Error::Type { expected: "string" });
+        }
+
+        let mut ptr: *const SQChar = std::ptr::null();
+        let mut len: SQInteger = 0;
+        let ret = unsafe { sq_getstringandsize(sq.vm, idx, &mut ptr, &mut len) };
+        if ret.is_error() {
+            return Err(Error::Type { expected: "string" });
+        }
+
+        Ok(Self {
+            handle,
+            ptr,
+            len: len as usize,
+        })
+    }
+
+    pub fn as_bytes(&self) -> &'vm [u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr as *const u8, self.len) }
+    }
+
+    pub fn to_str(&self) -> std::result::Result<&'vm str, std::str::Utf8Error> {
+        std::str::from_utf8(self.as_bytes())
+    }
+}
+
+#[test]
+fn test_string_from_stack() {
+    let sq = Squirrel::new(1024);
+    sq.exec("return \"test\"").unwrap();
+
+    let str = SqString::from_top(&sq).unwrap();
+    assert_eq!(str.to_str().unwrap(), "test")
+}
+
+pub trait FromSquirrel<'vm>: Sized {
+    fn from_top(sq: &'vm Squirrel) -> Result<Self>;
+}
+
+impl FromSquirrel<'_> for bool {
     fn from_top(sq: &Squirrel) -> Result<Self> {
         let mut out: SQBool = 0;
-        if unsafe { sq_getbool(sq.vm, -1, &mut out) } < 0 {
+        if unsafe { sq_getbool(sq.vm, -1, &mut out) }.is_error() {
             return Err(Error::Type { expected: "bool" });
         }
         Ok(out != 0)
     }
 }
 
-impl FromSquirrel for Integer {
+impl FromSquirrel<'_> for Integer {
     fn from_top(sq: &Squirrel) -> Result<Self> {
         let mut out: SQInteger = 0;
-        if unsafe { sq_getinteger(sq.vm, -1, &mut out) } < 0 {
+        if unsafe { sq_getinteger(sq.vm, -1, &mut out) }.is_error() {
             return Err(Error::Type {
                 expected: "integer",
             });
@@ -222,12 +305,18 @@ impl FromSquirrel for Integer {
     }
 }
 
-impl FromSquirrel for Float {
+impl FromSquirrel<'_> for Float {
     fn from_top(sq: &Squirrel) -> Result<Self> {
         let mut out: SQFloat = 0.0;
-        if unsafe { sq_getfloat(sq.vm, -1, &mut out) } < 0 {
+        if unsafe { sq_getfloat(sq.vm, -1, &mut out) }.is_error() {
             return Err(Error::Type { expected: "float" });
         }
         Ok(out)
+    }
+}
+
+impl<'vm> FromSquirrel<'vm> for SqString<'vm> {
+    fn from_top(sq: &'vm Squirrel) -> Result<Self> {
+        SqString::from_stack(sq, -1)
     }
 }

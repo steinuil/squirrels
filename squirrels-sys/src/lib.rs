@@ -10,6 +10,16 @@ use std::{
 
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
+#[must_use]
+#[repr(transparent)]
+pub struct SQRESULT(pub SQInteger);
+
+impl SQRESULT {
+    pub fn is_error(&self) -> bool {
+        self.0 < 0
+    }
+}
+
 #[test]
 fn squirrel_test() {
     use std::ffi::c_char;
@@ -23,20 +33,20 @@ fn squirrel_test() {
 
         let script = "return 1 + 2";
 
-        sq_compilebuffer(
+        let _ = sq_compilebuffer(
             vm,
             script.as_ptr() as *const c_char,
             script.len() as SQInteger,
-            c"embedded".as_ptr(),
+            c"=embedded".as_ptr(),
             1,
         );
 
         sq_push(vm, -2);
 
-        sq_call(vm, 1, SQTrue as _, SQTrue as _);
+        let _ = sq_call(vm, 1, SQTrue as _, SQTrue as _);
 
         let mut out: SQInteger = 0;
-        sq_getinteger(vm, -1, &mut out);
+        let _ = sq_getinteger(vm, -1, &mut out);
         assert_eq!(out, 3);
 
         sq_pop(vm, 3);
@@ -68,19 +78,6 @@ pub fn install_print_shims(v: HSQUIRRELVM) {
         sq_setprintfunc(v, Some(squirrels_shim_print), Some(squirrels_shim_error));
     }
 }
-
-// pub fn set_print_fns<P, E>(v: HSQUIRRELVM, print: Option<P>, error: Option<E>)
-// where
-//     P: Fn(&str) + Send + Sync + 'static,
-//     E: Fn(&str) + Send + Sync + 'static,
-// {
-//     {
-//         let mut reg = registry().lock().unwrap();
-//         let fns = reg.entry(v as usize).or_default();
-//         fns.print = print.map(|f| Arc::new(f) as PrintCallback);
-//         fns.error = error.map(|f| Arc::new(f) as PrintCallback);
-//     }
-// }
 
 pub fn set_print_fn<F>(v: HSQUIRRELVM, f: F)
 where
