@@ -117,6 +117,13 @@ impl Drop for Squirrel {
     }
 }
 
+fn get_runtime_error(sq: &Squirrel) -> Value<'_> {
+    unsafe { sq_getlasterror(sq.vm) };
+    let err = ObjectHandle::from_stack(sq, -1);
+    unsafe { sq_pop(sq.vm, 1) };
+    err.to_value()
+}
+
 impl Squirrel {
     /// Get the execution state of this virtual machine.
     pub fn state(&self) -> ExecutionState {
@@ -176,11 +183,7 @@ impl Squirrel {
         if ret.is_error() {
             unsafe { sq_pop(self.vm, 2) };
 
-            unsafe { sq_getlasterror(self.vm) };
-            let err = ObjectHandle::from_stack(self, -1).to_value();
-            unsafe { sq_pop(self.vm, 1) };
-
-            return Err(CallError::Runtime(err));
+            return Err(CallError::Runtime(get_runtime_error(self)));
         }
 
         let val = T::from_top(self);
@@ -406,11 +409,10 @@ fn test_value_from_object_handle() {
 pub struct Table<'vm>(ObjectHandle<'vm>);
 
 impl<'vm> Table<'vm> {
-    pub fn get<'a, K, V>(&'a self, key: K) -> Result<Option<V>>
+    pub fn get<K, V>(&self, key: K) -> Result<Option<V>>
     where
         K: IntoSquirrel,
         V: FromSquirrel<'vm>,
-        'vm: 'a,
     {
         self.0.push();
         key.push_to(self.0.vm);
@@ -426,22 +428,25 @@ impl<'vm> Table<'vm> {
         val.map(Some)
     }
 
-    pub fn set<'a, K, V>(&'a self, key: K, value: V) -> Result<()>
+    pub fn set<K, V>(&self, key: K, value: V) -> std::result::Result<(), CallError<'_>>
     where
         K: IntoSquirrel,
         V: IntoSquirrel,
-        'vm: 'a,
     {
         self.0.push();
         key.push_to(self.0.vm);
         value.push_to(self.0.vm);
 
         let ret = unsafe { sq_newslot(self.0.vm.vm, -3, SQFalse as _) };
+        if ret.is_error() {
+            // sq_newslot only pops k+v on success
+            unsafe { sq_pop(self.0.vm.vm, 3) };
+
+            return Err(CallError::Runtime(get_runtime_error(self.0.vm)));
+        }
+
+        // Pop the table
         unsafe { sq_pop(self.0.vm.vm, 1) };
-        assert!(
-            !ret.is_error(),
-            "failed to set a key in a Table we just pushed"
-        );
 
         Ok(())
     }
@@ -470,6 +475,15 @@ fn table_roundtrip() {
     sq.eval::<()>("y <- x * 2").unwrap();
     let y: Integer = sq.globals().get("y").unwrap().unwrap();
     assert_eq!(y, 20);
+}
+
+#[test]
+fn table_set_error() {
+    let sq = Squirrel::new(1024);
+    let globals = sq.globals();
+    // null is not a valid key, so this should fail.
+    let err = globals.set((), 1).unwrap_err();
+    assert!(matches!(err, CallError::Runtime(_)));
 }
 
 pub struct Array<'vm>(ObjectHandle<'vm>);
