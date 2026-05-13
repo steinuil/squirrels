@@ -122,7 +122,7 @@ impl Drop for Squirrel {
 fn get_runtime_error(sq: &Squirrel) -> Value<'_> {
     unsafe { sq_getlasterror(sq.vm) };
     let err = ObjectHandle::from_stack(sq, -1);
-    unsafe { sq_pop(sq.vm, 1) };
+    sq.pop(1);
     err.to_value()
 }
 
@@ -174,7 +174,7 @@ impl Squirrel {
         self.push_root_table();
 
         if let Err(e) = self.compile_str(src, c"=eval") {
-            unsafe { sq_pop(self.vm, 1) };
+            self.pop(1);
             return Err(e.into());
         }
 
@@ -184,13 +184,13 @@ impl Squirrel {
 
         let ret = unsafe { sq_call(self.vm, 1, SQTrue as _, SQFalse as _) };
         if ret.is_error() {
-            unsafe { sq_pop(self.vm, 2) };
+            self.pop(2);
 
             return Err(CallError::Runtime(get_runtime_error(self)));
         }
 
         let val = T::from_top(self);
-        unsafe { sq_pop(self.vm, 3) };
+        self.pop(3);
         Ok(val?)
     }
 
@@ -205,6 +205,16 @@ impl Squirrel {
 
     pub(crate) fn push_root_table(&self) {
         unsafe { sq_pushobject(self.vm, self.root) };
+    }
+
+    pub(crate) fn pop(&self, count: Integer) {
+        let stack_depth = self.stack_depth();
+        assert!(
+            count <= stack_depth,
+            "attempted to pop {count} elements but the stack is {stack_depth}"
+        );
+        assert!(count > 0);
+        unsafe { sq_pop(self.vm, count) };
     }
 }
 
@@ -350,7 +360,7 @@ impl<'vm> SqString<'vm> {
         let ret = unsafe { sq_getstringandsize(handle.vm.vm, -1, &mut ptr, &mut len) };
 
         // Pop before we check for an error to avoid leaving the stack in an invalid state.
-        unsafe { sq_pop(handle.vm.vm, 1) };
+        handle.vm.pop(1);
 
         assert!(
             !ret.is_error(),
@@ -426,12 +436,12 @@ impl<'vm> Table<'vm> {
 
         let ret = unsafe { sq_get(self.0.vm.vm, -2) };
         if ret.is_error() {
-            unsafe { sq_pop(self.0.vm.vm, 1) };
+            self.0.vm.pop(1);
             return Ok(None);
         }
 
         let val = V::from_top(self.0.vm);
-        unsafe { sq_pop(self.0.vm.vm, 2) };
+        self.0.vm.pop(2);
         val.map(Some)
     }
 
@@ -447,13 +457,13 @@ impl<'vm> Table<'vm> {
         let ret = unsafe { sq_newslot(self.0.vm.vm, -3, SQFalse as _) };
         if ret.is_error() {
             // sq_newslot only pops k+v on success
-            unsafe { sq_pop(self.0.vm.vm, 3) };
+            self.0.vm.pop(3);
 
             return Err(CallError::Runtime(get_runtime_error(self.0.vm)));
         }
 
         // Pop the table
-        unsafe { sq_pop(self.0.vm.vm, 1) };
+        self.0.vm.pop(1);
 
         Ok(())
     }
@@ -496,6 +506,24 @@ fn table_set_error() {
 
 pub struct Array<'vm>(ObjectHandle<'vm>);
 
+impl<'vm> Array<'vm> {
+    pub fn get<V: FromSquirrel<'vm>>(&self, idx: Integer) -> Result<Option<V>> {
+        self.0.push();
+        idx.push_to(self.0.vm);
+
+        let ret = unsafe { sq_get(self.0.vm.vm, -2) };
+        if ret.is_error() {
+            self.0.vm.pop(1);
+
+            return Ok(None);
+        }
+
+        let val = V::from_top(self.0.vm);
+        self.0.vm.pop(2);
+        val.map(Some)
+    }
+}
+
 pub struct UserData<'vm>(ObjectHandle<'vm>);
 
 pub struct Closure<'vm>(ObjectHandle<'vm>);
@@ -508,15 +536,13 @@ impl<'vm> Closure<'vm> {
 
         let ret = unsafe { sq_call(self.0.vm.vm, arg_count, SQTrue as _, SQFalse as _) };
         if ret.is_error() {
-            unsafe { sq_pop(self.0.vm.vm, 1) }
+            self.0.vm.pop(1);
 
             return Err(CallError::Runtime(get_runtime_error(self.0.vm)));
         }
 
         let val = T::from_top(self.0.vm);
-
-        unsafe { sq_pop(self.0.vm.vm, 2) };
-
+        self.0.vm.pop(2);
         Ok(val?)
     }
 }
