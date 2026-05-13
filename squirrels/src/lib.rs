@@ -19,6 +19,8 @@ use squirrels_sys::{
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+pub type CallResult<'vm, T> = std::result::Result<T, CallError<'vm>>;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("compile error at {source_name}:{line}:{column}: description")]
@@ -135,7 +137,11 @@ impl Squirrel {
         }
     }
 
-    /// Compile the Squirrel program in `src` and push it as a function in the stack.
+    pub fn stack_depth(&self) -> Integer {
+        unsafe { sq_gettop(self.vm) }
+    }
+
+    /// Compile the Squirrel program in `src` and push it as a closure on the stack.
     pub fn compile_str(&self, src: &str, source_name: &CStr) -> Result<()> {
         compiler_error_handler::clear_error(self.vm);
 
@@ -164,11 +170,8 @@ impl Squirrel {
     }
 
     /// Evaluate the Squirrel program in `src` and return its output value.
-    pub fn eval<'vm, T: FromSquirrel<'vm>>(
-        &'vm self,
-        src: &str,
-    ) -> std::result::Result<T, CallError<'vm>> {
-        unsafe { sq_pushroottable(self.vm) };
+    pub fn eval<'vm, T: FromSquirrel<'vm>>(&'vm self, src: &str) -> CallResult<'vm, T> {
+        self.push_root_table();
 
         if let Err(e) = self.compile_str(src, c"=eval") {
             unsafe { sq_pop(self.vm, 1) };
@@ -191,13 +194,17 @@ impl Squirrel {
         Ok(val?)
     }
 
-    pub fn globals(&self) -> Table<'_> {
+    pub fn root_table(&self) -> Table<'_> {
         let mut root = self.root;
         unsafe { sq_addref(self.vm, &mut root) };
         Table(ObjectHandle {
             vm: self,
             obj: root,
         })
+    }
+
+    pub(crate) fn push_root_table(&self) {
+        unsafe { sq_pushobject(self.vm, self.root) };
     }
 }
 
@@ -428,7 +435,7 @@ impl<'vm> Table<'vm> {
         val.map(Some)
     }
 
-    pub fn set<K, V>(&self, key: K, value: V) -> std::result::Result<(), CallError<'_>>
+    pub fn set<K, V>(&self, key: K, value: V) -> CallResult<'_, ()>
     where
         K: IntoSquirrel,
         V: IntoSquirrel,
@@ -456,14 +463,14 @@ impl<'vm> Table<'vm> {
 fn table_get() {
     let sq = Squirrel::new(1024);
     sq.eval::<()>("a <- 1").unwrap();
-    let v = sq.globals().get::<_, Integer>("a").unwrap();
+    let v = sq.root_table().get::<_, Integer>("a").unwrap();
     assert!(matches!(v, Some(1)))
 }
 
 #[test]
 fn table_set() {
     let sq = Squirrel::new(1024);
-    sq.globals().set("a", 24).unwrap();
+    sq.root_table().set("a", 24).unwrap();
     let v: Integer = sq.eval("return a").unwrap();
     assert_eq!(v, 24);
 }
@@ -471,18 +478,19 @@ fn table_set() {
 #[test]
 fn table_roundtrip() {
     let sq = Squirrel::new(1024);
-    sq.globals().set("x", 10).unwrap();
+    sq.root_table().set("x", 10).unwrap();
     sq.eval::<()>("y <- x * 2").unwrap();
-    let y: Integer = sq.globals().get("y").unwrap().unwrap();
+    let y: Integer = sq.root_table().get("y").unwrap().unwrap();
     assert_eq!(y, 20);
 }
 
 #[test]
 fn table_set_error() {
     let sq = Squirrel::new(1024);
-    let globals = sq.globals();
+    let root_table = sq.root_table();
+
     // null is not a valid key, so this should fail.
-    let err = globals.set((), 1).unwrap_err();
+    let err = root_table.set((), 1).unwrap_err();
     assert!(matches!(err, CallError::Runtime(_)));
 }
 
@@ -491,6 +499,86 @@ pub struct Array<'vm>(ObjectHandle<'vm>);
 pub struct UserData<'vm>(ObjectHandle<'vm>);
 
 pub struct Closure<'vm>(ObjectHandle<'vm>);
+
+impl<'vm> Closure<'vm> {
+    pub fn call<A: IntoArgs, T: FromSquirrel<'vm>>(&self, args: A) -> CallResult<'vm, T> {
+        self.push_to(self.0.vm);
+        self.0.vm.push_root_table();
+        let arg_count = args.push_args(self.0.vm) + 1;
+
+        let ret = unsafe { sq_call(self.0.vm.vm, arg_count, SQTrue as _, SQFalse as _) };
+        if ret.is_error() {
+            unsafe { sq_pop(self.0.vm.vm, 1) }
+
+            return Err(CallError::Runtime(get_runtime_error(self.0.vm)));
+        }
+
+        let val = T::from_top(self.0.vm);
+
+        unsafe { sq_pop(self.0.vm.vm, 2) };
+
+        Ok(val?)
+    }
+}
+
+#[test]
+fn closure_call_no_args() {
+    let sq = Squirrel::new(1024);
+    let f: Closure = sq.eval("return function() { return 123 }").unwrap();
+    let val: Integer = f.call(()).unwrap();
+    assert_eq!(val, 123);
+}
+
+#[test]
+fn closure_call_single_arg() {
+    let sq = Squirrel::new(1024);
+    let f: Closure = sq.eval("return function(n) { return n + 1 }").unwrap();
+    let val: Integer = f.call((9000,)).unwrap();
+    assert_eq!(val, 9001);
+}
+
+#[test]
+fn closure_call_multiple_args() {
+    let sq = Squirrel::new(1024);
+    let f: Closure = sq.eval("return function(n, m) { return n + m }").unwrap();
+    let val: Integer = f.call((3, 4)).unwrap();
+    assert_eq!(val, 7);
+}
+
+#[test]
+fn closure_call_mixed_types() {
+    let sq = Squirrel::new(1024);
+    let f: Closure = sq
+        .eval("return function(s, n) { return s + n.tostring() }")
+        .unwrap();
+    let val: SqString = f.call(("count: ", 9001)).unwrap();
+    assert_eq!(val.to_str().unwrap(), "count: 9001");
+}
+
+#[test]
+fn closure_call_error() {
+    let sq = Squirrel::new(1024);
+    let f: Closure = sq.eval("return function(x) { throw \"error\" }").unwrap();
+    let err = f.call::<_, ()>((1,)).unwrap_err();
+    assert!(matches!(err, CallError::Runtime(Value::String(_))));
+}
+
+#[test]
+fn closure_outlives_other_evals() {
+    let sq = Squirrel::new(1024);
+    let f: Closure = sq.eval("return function(x) { return x + 1 }").unwrap();
+    let _: Integer = sq.eval("return 0").unwrap();
+    let val: Integer = f.call((10,)).unwrap();
+    assert_eq!(val, 11);
+}
+
+#[test]
+fn closure_call_no_stack_leak() {
+    let sq = Squirrel::new(1024);
+    let f: Closure = sq.eval("return function(x) { return x + 1 }").unwrap();
+    let _: Integer = f.call((10,)).unwrap();
+    assert_eq!(sq.stack_depth(), 0);
+}
 
 pub struct NativeClosure<'vm>(ObjectHandle<'vm>);
 
@@ -651,45 +739,53 @@ impl<'vm> FromSquirrel<'vm> for Value<'vm> {
     }
 }
 
-// TODO we should validate that the Squirrel VM we're targeting
-// and the one we're pushing to are the same.
 pub trait IntoSquirrel {
-    fn push_to(self, sq: &Squirrel);
+    fn push_to(&self, sq: &Squirrel);
 }
 
 impl IntoSquirrel for () {
-    fn push_to(self, sq: &Squirrel) {
+    fn push_to(&self, sq: &Squirrel) {
         unsafe { sq_pushnull(sq.vm) };
     }
 }
 
 impl IntoSquirrel for Integer {
-    fn push_to(self, sq: &Squirrel) {
-        unsafe { sq_pushinteger(sq.vm, self) };
+    fn push_to(&self, sq: &Squirrel) {
+        unsafe { sq_pushinteger(sq.vm, *self) };
     }
 }
 
 impl IntoSquirrel for Float {
-    fn push_to(self, sq: &Squirrel) {
-        unsafe { sq_pushfloat(sq.vm, self) };
+    fn push_to(&self, sq: &Squirrel) {
+        unsafe { sq_pushfloat(sq.vm, *self) };
     }
 }
 
 impl IntoSquirrel for bool {
-    fn push_to(self, sq: &Squirrel) {
-        unsafe { sq_pushbool(sq.vm, if self { 1 } else { 0 }) };
+    fn push_to(&self, sq: &Squirrel) {
+        unsafe { sq_pushbool(sq.vm, if *self { 1 } else { 0 }) };
     }
 }
 
 impl IntoSquirrel for SqString<'_> {
-    fn push_to(self, _: &Squirrel) {
+    fn push_to(&self, sq: &Squirrel) {
+        assert!(
+            std::ptr::eq(self.handle.vm as *const _, sq.vm as *const _),
+            "pushing handle to a different VM"
+        );
         self.handle.push();
     }
 }
 
 impl IntoSquirrel for &str {
-    fn push_to(self, sq: &Squirrel) {
+    fn push_to(&self, sq: &Squirrel) {
         SqString::from_str(sq, self);
+    }
+}
+
+impl IntoSquirrel for String {
+    fn push_to(&self, sq: &Squirrel) {
+        self.as_str().push_to(sq);
     }
 }
 
@@ -697,7 +793,11 @@ macro_rules! handle_into_squirrel {
     ($($t:ident),*) => {
         $(
             impl IntoSquirrel for $t<'_> {
-                fn push_to(self, _: &Squirrel) {
+                fn push_to(&self, sq: &Squirrel) {
+                    assert!(
+                        std::ptr::eq(self.0.vm.vm as *const _, sq.vm as *const _),
+                        "pushing handle to a different VM"
+                    );
                     self.0.push();
                 }
             }
@@ -719,9 +819,9 @@ handle_into_squirrel!(
 );
 
 impl IntoSquirrel for Value<'_> {
-    fn push_to(self, sq: &Squirrel) {
+    fn push_to(&self, sq: &Squirrel) {
         match self {
-            Value::Null => <() as IntoSquirrel>::push_to((), sq),
+            Value::Null => <() as IntoSquirrel>::push_to(&(), sq),
             Value::Integer(n) => n.push_to(sq),
             Value::Float(n) => n.push_to(sq),
             Value::Bool(b) => b.push_to(sq),
@@ -740,3 +840,165 @@ impl IntoSquirrel for Value<'_> {
         }
     }
 }
+
+pub trait IntoArgs {
+    fn push_args(self, sq: &Squirrel) -> SQInteger;
+}
+
+impl IntoArgs for () {
+    fn push_args(self, _: &Squirrel) -> SQInteger {
+        0
+    }
+}
+
+macro_rules! count_args {
+    ($($_:tt),+) => {
+        <[()]>::len(&[$( count_args!(@unit $_) ),+])
+    };
+    (@unit $_:tt) => { () };
+}
+
+macro_rules! impl_into_args_tuple {
+    ($($field:tt = $name:ident),+ $(,)?) => {
+        impl<$($name: IntoSquirrel),+> IntoArgs for ($($name,)+) {
+            fn push_args(self, sq: &Squirrel) -> SQInteger {
+                $( self.$field.push_to(sq); )+
+                count_args!($($name),+) as SQInteger
+            }
+        }
+    }
+}
+
+impl_into_args_tuple!(0 = T0);
+impl_into_args_tuple!(0 = T0, 1 = T1);
+impl_into_args_tuple!(0 = T0, 1 = T1, 2 = T2);
+impl_into_args_tuple!(0 = T0, 1 = T1, 2 = T2, 3 = T3);
+impl_into_args_tuple!(0 = T0, 1 = T1, 2 = T2, 3 = T3, 4 = T4);
+impl_into_args_tuple!(0 = T0, 1 = T1, 2 = T2, 3 = T3, 4 = T4, 5 = T5);
+impl_into_args_tuple!(0 = T0, 1 = T1, 2 = T2, 3 = T3, 4 = T4, 5 = T5, 6 = T6);
+impl_into_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+);
+impl_into_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+);
+impl_into_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+    9 = T9,
+);
+impl_into_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+    9 = T9,
+    10 = T10,
+);
+impl_into_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+    9 = T9,
+    10 = T10,
+    11 = T11,
+);
+impl_into_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+    9 = T9,
+    10 = T10,
+    11 = T11,
+    12 = T12,
+);
+impl_into_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+    9 = T9,
+    10 = T10,
+    11 = T11,
+    12 = T12,
+    13 = T13,
+);
+impl_into_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+    9 = T9,
+    10 = T10,
+    11 = T11,
+    12 = T12,
+    13 = T13,
+    14 = T14,
+);
+impl_into_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+    9 = T9,
+    10 = T10,
+    11 = T11,
+    12 = T12,
+    13 = T13,
+    14 = T14,
+    15 = T15,
+);
