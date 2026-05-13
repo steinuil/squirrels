@@ -1,13 +1,18 @@
 mod compiler_error_handler;
 
-use std::ffi::{CStr, c_char};
+use std::ffi::{CStr, c_char, c_void};
 
 use squirrels_sys::{
     HSQOBJECT, HSQUIRRELVM, SQ_VMSTATE_IDLE, SQ_VMSTATE_RUNNING, SQ_VMSTATE_SUSPENDED, SQBool,
-    SQChar, SQFalse, SQFloat, SQInteger, SQTrue, sq_addref, sq_call, sq_close, sq_compilebuffer,
-    sq_getbool, sq_getfloat, sq_getinteger, sq_getrefcount, sq_getstackobj, sq_getstringandsize,
-    sq_gettop, sq_getvmstate, sq_open, sq_pop, sq_push, sq_pushobject, sq_pushroottable,
-    sq_release, sq_resetobject, tagSQObjectType_OT_STRING,
+    SQChar, SQFalse, SQFloat, SQInteger, SQTrue, SQUnsignedInteger, sq_addref, sq_call, sq_close,
+    sq_compilebuffer, sq_getbool, sq_getfloat, sq_getinteger, sq_getrefcount, sq_getstackobj,
+    sq_getstringandsize, sq_gettop, sq_getvmstate, sq_open, sq_pop, sq_push, sq_pushobject,
+    sq_pushroottable, sq_release, sq_resetobject, tagSQObjectType_OT_ARRAY,
+    tagSQObjectType_OT_BOOL, tagSQObjectType_OT_CLASS, tagSQObjectType_OT_CLOSURE,
+    tagSQObjectType_OT_FLOAT, tagSQObjectType_OT_GENERATOR, tagSQObjectType_OT_INSTANCE,
+    tagSQObjectType_OT_INTEGER, tagSQObjectType_OT_NATIVECLOSURE, tagSQObjectType_OT_NULL,
+    tagSQObjectType_OT_STRING, tagSQObjectType_OT_TABLE, tagSQObjectType_OT_THREAD,
+    tagSQObjectType_OT_USERDATA, tagSQObjectType_OT_USERPOINTER, tagSQObjectType_OT_WEAKREF,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -30,6 +35,7 @@ pub enum Error {
 }
 
 type Integer = SQInteger;
+type UnsignedInteger = SQUnsignedInteger;
 type Float = SQFloat;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,8 +57,10 @@ impl Squirrel {
     ///
     /// `initial_stack_size` controls the size of the stack in slots,
     /// or number of objects.
-    pub fn new(initial_stack_size: usize) -> Self {
-        let vm = unsafe { sq_open(initial_stack_size as _) };
+    pub fn new(initial_stack_size: Integer) -> Self {
+        let vm = unsafe { sq_open(initial_stack_size) };
+        assert!(!vm.is_null(), "sq_open returned a null vm");
+
         compiler_error_handler::register_vm(vm);
         squirrels_sys::install_print_shims(vm);
         Self { vm }
@@ -125,6 +133,8 @@ impl Squirrel {
         }
     }
 
+    // TODO: decide whether to leave the stack empty when `exec` is done.
+    // Right now it does not pop [roottable, compiled_closure].
     pub fn exec(&self, src: &str) -> Result<()> {
         unsafe { sq_pushroottable(self.vm) };
 
@@ -229,9 +239,36 @@ impl<'vm> ObjectHandle<'vm> {
     }
 
     /// Get the ref count of this object.
-    pub fn ref_count(&self) -> u64 {
+    pub fn ref_count(&self) -> UnsignedInteger {
         let mut obj = self.obj;
         unsafe { sq_getrefcount(self.vm.vm, &mut obj) }
+    }
+
+    #[allow(non_upper_case_globals)]
+    pub fn to_value(self) -> Value<'vm> {
+        match self.obj._type {
+            tagSQObjectType_OT_NULL => Value::Null,
+            tagSQObjectType_OT_INTEGER => Value::Integer(unsafe { self.obj._unVal.nInteger }),
+            tagSQObjectType_OT_FLOAT => Value::Float(unsafe { self.obj._unVal.fFloat }),
+            tagSQObjectType_OT_BOOL => Value::Bool(unsafe { self.obj._unVal.nInteger } != 0),
+            tagSQObjectType_OT_STRING => Value::String(
+                SqString::from_handle(self).expect("OT_STRING handle materializes as SqString"),
+            ),
+            tagSQObjectType_OT_TABLE => Value::Table(Table(self)),
+            tagSQObjectType_OT_ARRAY => Value::Array(Array(self)),
+            tagSQObjectType_OT_USERDATA => Value::UserData(UserData(self)),
+            tagSQObjectType_OT_CLOSURE => Value::Closure(Closure(self)),
+            tagSQObjectType_OT_NATIVECLOSURE => Value::NativeClosure(NativeClosure(self)),
+            tagSQObjectType_OT_GENERATOR => Value::Generator(Generator(self)),
+            tagSQObjectType_OT_USERPOINTER => {
+                Value::UserPointer(UserPointer(unsafe { self.obj._unVal.pUserPointer }))
+            }
+            tagSQObjectType_OT_THREAD => Value::Thread(Thread(self)),
+            tagSQObjectType_OT_CLASS => Value::Class(Class(self)),
+            tagSQObjectType_OT_INSTANCE => Value::Instance(Instance(self)),
+            tagSQObjectType_OT_WEAKREF => Value::WeakRef(WeakRef(self)),
+            t => panic!("Squirrel VM returned an invalid object type: {t:?}"),
+        }
     }
 }
 
@@ -248,6 +285,34 @@ pub struct SqString<'vm> {
 }
 
 impl<'vm> SqString<'vm> {
+    pub(crate) fn from_handle(handle: ObjectHandle<'vm>) -> Result<Self> {
+        if handle.obj._type != tagSQObjectType_OT_STRING {
+            return Err(Error::Type { expected: "string" });
+        }
+
+        // First we must push the string onto the stack because we can't get its stack index
+        // from its handle, if it has any.
+        handle.push();
+
+        let mut ptr: *const SQChar = std::ptr::null();
+        let mut len: SQInteger = 0;
+        let ret = unsafe { sq_getstringandsize(handle.vm.vm, -1, &mut ptr, &mut len) };
+
+        // Pop before we check for an error to avoid leaving the stack in an invalid state.
+        unsafe { sq_pop(handle.vm.vm, 1) };
+
+        assert!(
+            !ret.is_error(),
+            "sq_getstringandsize failed on a verified OT_STRING"
+        );
+
+        Ok(Self {
+            handle,
+            ptr,
+            len: len as usize,
+        })
+    }
+
     pub(crate) fn from_stack(sq: &'vm Squirrel, idx: SQInteger) -> Result<Self> {
         let handle = ObjectHandle::from_stack(sq, idx);
         if handle.obj._type != tagSQObjectType_OT_STRING {
@@ -257,9 +322,10 @@ impl<'vm> SqString<'vm> {
         let mut ptr: *const SQChar = std::ptr::null();
         let mut len: SQInteger = 0;
         let ret = unsafe { sq_getstringandsize(sq.vm, idx, &mut ptr, &mut len) };
-        if ret.is_error() {
-            return Err(Error::Type { expected: "string" });
-        }
+        assert!(
+            !ret.is_error(),
+            "sq_getstringandsize failed on a verified OT_STRING"
+        );
 
         Ok(Self {
             handle,
@@ -283,9 +349,61 @@ fn test_string_from_stack() {
     sq.exec("return \"test\"").unwrap();
 
     let str = SqString::from_top(&sq).unwrap();
-    assert_eq!(str.to_str().unwrap(), "test")
+    assert_eq!(str.to_str().unwrap(), "test");
 }
 
+#[test]
+fn test_value_from_object_handle() {
+    let sq = Squirrel::new(1024);
+    sq.exec("return 123").unwrap();
+
+    let v = ObjectHandle::from_stack(&sq, -1).to_value();
+    assert!(matches!(v, Value::Integer(123)));
+}
+
+pub struct Table<'vm>(ObjectHandle<'vm>);
+
+pub struct Array<'vm>(ObjectHandle<'vm>);
+
+pub struct UserData<'vm>(ObjectHandle<'vm>);
+
+pub struct Closure<'vm>(ObjectHandle<'vm>);
+
+pub struct NativeClosure<'vm>(ObjectHandle<'vm>);
+
+pub struct Generator<'vm>(ObjectHandle<'vm>);
+
+pub struct UserPointer(*mut c_void);
+
+pub struct Thread<'vm>(ObjectHandle<'vm>);
+
+pub struct Class<'vm>(ObjectHandle<'vm>);
+
+pub struct Instance<'vm>(ObjectHandle<'vm>);
+
+pub struct WeakRef<'vm>(ObjectHandle<'vm>);
+
+pub enum Value<'vm> {
+    Null,
+    Integer(Integer),
+    Float(Float),
+    Bool(bool),
+    String(SqString<'vm>),
+    Table(Table<'vm>),
+    Array(Array<'vm>),
+    UserData(UserData<'vm>),
+    Closure(Closure<'vm>),
+    NativeClosure(NativeClosure<'vm>),
+    Generator(Generator<'vm>),
+    UserPointer(UserPointer),
+    Thread(Thread<'vm>),
+    Class(Class<'vm>),
+    Instance(Instance<'vm>),
+    WeakRef(WeakRef<'vm>),
+}
+
+// TODO should this trait be public?
+// If we call `from_top` on an empty stack we panic.
 pub trait FromSquirrel<'vm>: Sized {
     fn from_top(sq: &'vm Squirrel) -> Result<Self>;
 }
@@ -331,5 +449,11 @@ impl FromSquirrel<'_> for Float {
 impl<'vm> FromSquirrel<'vm> for SqString<'vm> {
     fn from_top(sq: &'vm Squirrel) -> Result<Self> {
         SqString::from_stack(sq, -1)
+    }
+}
+
+impl<'vm> FromSquirrel<'vm> for Value<'vm> {
+    fn from_top(sq: &'vm Squirrel) -> Result<Self> {
+        Ok(ObjectHandle::from_stack(sq, -1).to_value())
     }
 }
