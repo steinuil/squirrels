@@ -755,7 +755,10 @@ impl IntoSquirrel for String<'_> {
 
 impl IntoSquirrel for &str {
     fn push_to(&self, sq: &Squirrel) {
-        String::from_str(sq, self);
+        // NOTE Kind of wasteful; we're pushing the string on the stack, popping it,
+        // and then pushing it again.
+        let s = String::from_str(sq, self);
+        s.obj.push()
     }
 }
 
