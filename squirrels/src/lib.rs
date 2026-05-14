@@ -2,6 +2,7 @@ mod array;
 mod compiler_error_handler;
 mod object;
 mod string;
+mod table;
 mod value;
 
 use std::{
@@ -12,20 +13,22 @@ use std::{
 use squirrels_sys::{
     HSQOBJECT, HSQUIRRELVM, SQ_VMSTATE_IDLE, SQ_VMSTATE_RUNNING, SQ_VMSTATE_SUSPENDED, SQBool,
     SQFalse, SQFloat, SQInteger, SQTrue, SQUnsignedInteger, SQUserPointer, sq_addref, sq_call,
-    sq_close, sq_compilebuffer, sq_get, sq_getbool, sq_getfloat, sq_getinteger, sq_getlasterror,
-    sq_getstackobj, sq_gettop, sq_getuserdata, sq_getvmstate, sq_newclosure, sq_newslot,
-    sq_newuserdata, sq_open, sq_pop, sq_push, sq_pushbool, sq_pushfloat, sq_pushinteger,
-    sq_pushnull, sq_pushobject, sq_pushroottable, sq_release, sq_resetobject, sq_setreleasehook,
-    sq_throwerror, sq_throwobject, tagSQObjectType_OT_ARRAY, tagSQObjectType_OT_CLASS,
-    tagSQObjectType_OT_CLOSURE, tagSQObjectType_OT_GENERATOR, tagSQObjectType_OT_INSTANCE,
-    tagSQObjectType_OT_NATIVECLOSURE, tagSQObjectType_OT_NULL, tagSQObjectType_OT_TABLE,
-    tagSQObjectType_OT_THREAD, tagSQObjectType_OT_USERDATA, tagSQObjectType_OT_WEAKREF,
+    sq_close, sq_compilebuffer, sq_getbool, sq_getfloat, sq_getinteger, sq_getlasterror,
+    sq_getstackobj, sq_gettop, sq_getuserdata, sq_getvmstate, sq_newclosure, sq_newuserdata,
+    sq_open, sq_pop, sq_push, sq_pushbool, sq_pushfloat, sq_pushinteger, sq_pushnull,
+    sq_pushobject, sq_pushroottable, sq_release, sq_resetobject, sq_setreleasehook, sq_throwerror,
+    sq_throwobject, tagSQObjectType_OT_ARRAY, tagSQObjectType_OT_CLASS, tagSQObjectType_OT_CLOSURE,
+    tagSQObjectType_OT_GENERATOR, tagSQObjectType_OT_INSTANCE, tagSQObjectType_OT_NATIVECLOSURE,
+    tagSQObjectType_OT_NULL, tagSQObjectType_OT_TABLE, tagSQObjectType_OT_THREAD,
+    tagSQObjectType_OT_USERDATA, tagSQObjectType_OT_WEAKREF,
 };
 
 pub use crate::array::Array;
-pub use crate::object::{Object, ObjectType};
 pub use crate::string::String;
+pub use crate::table::Table;
 pub use crate::value::Value;
+
+pub(crate) use crate::object::{Object, ObjectType};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -142,7 +145,7 @@ impl Drop for Squirrel {
     }
 }
 
-fn get_runtime_error(sq: &Squirrel) -> Value<'_> {
+pub(crate) fn get_runtime_error(sq: &Squirrel) -> Value<'_> {
     unsafe { sq_getlasterror(sq.vm) };
     let err = Object::from_stack(sq, -1);
     sq.pop(1);
@@ -292,7 +295,7 @@ impl Squirrel {
         let stack_depth = self.stack_depth();
         assert!(
             count <= stack_depth,
-            "attempted to pop {count} elements but the stack is {stack_depth}"
+            "attempted to pop {count} elements but the stack has {stack_depth}"
         );
         assert!(count > 0);
         unsafe { sq_pop(self.vm, count) };
@@ -417,87 +420,6 @@ fn assert_valid_stack_idx(vm: HSQUIRRELVM, idx: SQInteger) {
     let top = unsafe { sq_gettop(vm) };
     let valid = idx != 0 && if idx > 0 { idx <= top } else { idx >= -top };
     assert!(valid, "invalid stack index {idx} (top={top})")
-}
-
-pub struct Table<'vm>(Object<'vm>);
-
-impl<'vm> Table<'vm> {
-    pub fn get<K, V>(&self, key: K) -> Result<Option<V>>
-    where
-        K: IntoSquirrel,
-        V: FromSquirrel<'vm>,
-    {
-        self.0.push();
-        key.push_to(self.0.sq);
-
-        let ret = unsafe { sq_get(self.0.sq.vm, -2) };
-        if ret.is_error() {
-            self.0.sq.pop(1);
-            return Ok(None);
-        }
-
-        let val = V::from_stack(self.0.sq, -1);
-        self.0.sq.pop(2);
-        val.map(Some)
-    }
-
-    pub fn set<K, V>(&self, key: K, value: V) -> CallResult<'_, ()>
-    where
-        K: IntoSquirrel,
-        V: IntoSquirrel,
-    {
-        self.0.push();
-        key.push_to(self.0.sq);
-        value.push_to(self.0.sq);
-
-        let ret = unsafe { sq_newslot(self.0.sq.vm, -3, SQFalse as _) };
-        if ret.is_error() {
-            // sq_newslot only pops k+v on success
-            self.0.sq.pop(3);
-
-            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
-        }
-
-        // Pop the table
-        self.0.sq.pop(1);
-
-        Ok(())
-    }
-}
-
-#[test]
-fn table_get() {
-    let sq = Squirrel::new(1024);
-    sq.eval::<()>("a <- 1").unwrap();
-    let v = sq.root_table().get::<_, Integer>("a").unwrap();
-    assert!(matches!(v, Some(1)))
-}
-
-#[test]
-fn table_set() {
-    let sq = Squirrel::new(1024);
-    sq.root_table().set("a", 24).unwrap();
-    let v: Integer = sq.eval("return a").unwrap();
-    assert_eq!(v, 24);
-}
-
-#[test]
-fn table_roundtrip() {
-    let sq = Squirrel::new(1024);
-    sq.root_table().set("x", 10).unwrap();
-    sq.eval::<()>("y <- x * 2").unwrap();
-    let y: Integer = sq.root_table().get("y").unwrap().unwrap();
-    assert_eq!(y, 20);
-}
-
-#[test]
-fn table_set_error() {
-    let sq = Squirrel::new(1024);
-    let root_table = sq.root_table();
-
-    // null is not a valid key, so this should fail.
-    let err = root_table.set((), 1).unwrap_err();
-    assert!(matches!(err, CallError::Runtime(_)));
 }
 
 pub struct UserData<'vm>(Object<'vm>);
