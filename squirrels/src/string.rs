@@ -66,6 +66,10 @@ impl<'vm> String<'vm> {
         std::str::from_utf8(self.as_bytes())
     }
 
+    pub fn to_string_lossy(&self) -> std::string::String {
+        std::string::String::from_utf8_lossy(self.as_bytes()).into_owned()
+    }
+
     pub fn from_str(sq: &'vm Squirrel, str: &str) -> Self {
         unsafe { sq_pushstring(sq.vm, str.as_bytes().as_ptr() as *const i8, str.len() as _) };
         let obj = String::from_stack(sq, -1).expect("expecting the string we just pushed");
@@ -90,7 +94,37 @@ impl PartialEq for String<'_> {
     }
 }
 
+impl<T> PartialEq<T> for String<'_>
+where
+    T: AsRef<[u8]> + ?Sized,
+{
+    fn eq(&self, other: &T) -> bool {
+        self.as_bytes() == other.as_ref()
+    }
+}
+
 impl Eq for String<'_> {}
+
+impl<T> PartialOrd<T> for String<'_>
+where
+    T: AsRef<[u8]> + ?Sized,
+{
+    fn partial_cmp(&self, other: &T) -> Option<std::cmp::Ordering> {
+        self.as_bytes().partial_cmp(other.as_ref())
+    }
+}
+
+impl PartialOrd for String<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for String<'_> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_bytes().cmp(other.as_bytes())
+    }
+}
 
 impl std::hash::Hash for String<'_> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
@@ -100,9 +134,13 @@ impl std::hash::Hash for String<'_> {
 
 impl std::fmt::Debug for String<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("String")
-            .field(&std::string::String::from_utf8_lossy(self.as_bytes()))
-            .finish()
+        let bytes = self.as_bytes();
+        if let Ok(s) = str::from_utf8(bytes) {
+            return s.fmt(f);
+        }
+
+        write!(f, "b")?;
+        <bstr::BStr as std::fmt::Debug>::fmt(bstr::BStr::new(&bytes), f)
     }
 }
 

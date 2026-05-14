@@ -175,9 +175,24 @@ impl PartialEq for Object<'_> {
 
 impl std::fmt::Debug for Object<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("Object")
-            .field(&self.clone().into_value())
-            .finish()
+        match self.kind() {
+            ObjectType::Null => write!(f, "Object(Null)"),
+            ObjectType::Integer => write!(f, "Object({})", unsafe { self.obj._unVal.nInteger }),
+            ObjectType::Float => write!(f, "Object({})", unsafe { self.obj._unVal.fFloat }),
+            ObjectType::Bool => write!(f, "Object({})", unsafe { self.obj._unVal.nInteger } != 0),
+            ObjectType::UserPointer
+            | ObjectType::String
+            | ObjectType::Table
+            | ObjectType::Array
+            | ObjectType::UserData
+            | ObjectType::Closure
+            | ObjectType::NativeClosure
+            | ObjectType::Generator
+            | ObjectType::Thread
+            | ObjectType::Class
+            | ObjectType::Instance
+            | ObjectType::WeakRef => write!(f, "Object({:p})", self.as_pointer()),
+        }
     }
 }
 
