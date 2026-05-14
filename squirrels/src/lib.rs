@@ -189,7 +189,7 @@ impl Squirrel {
             return Err(CallError::Runtime(get_runtime_error(self)));
         }
 
-        let val = T::from_top(self);
+        let val = T::from_stack(self, -1);
         self.pop(3);
         Ok(val?)
     }
@@ -440,7 +440,7 @@ impl<'vm> Table<'vm> {
             return Ok(None);
         }
 
-        let val = V::from_top(self.0.vm);
+        let val = V::from_stack(self.0.vm, -1);
         self.0.vm.pop(2);
         val.map(Some)
     }
@@ -518,7 +518,7 @@ impl<'vm> Array<'vm> {
             return Ok(None);
         }
 
-        let val = V::from_top(self.0.vm);
+        let val = V::from_stack(self.0.vm, -1);
         self.0.vm.pop(2);
         val.map(Some)
     }
@@ -541,7 +541,7 @@ impl<'vm> Closure<'vm> {
             return Err(CallError::Runtime(get_runtime_error(self.0.vm)));
         }
 
-        let val = T::from_top(self.0.vm);
+        let val = T::from_stack(self.0.vm, -1);
         self.0.vm.pop(2);
         Ok(val?)
     }
@@ -668,12 +668,12 @@ impl std::fmt::Debug for Value<'_> {
 // TODO should this trait be public?
 // If we call `from_top` on an empty stack we panic.
 pub trait FromSquirrel<'vm>: Sized {
-    fn from_top(sq: &'vm Squirrel) -> Result<Self>;
+    fn from_stack(sq: &'vm Squirrel, idx: Integer) -> Result<Self>;
 }
 
 impl FromSquirrel<'_> for () {
-    fn from_top(sq: &'_ Squirrel) -> Result<Self> {
-        let obj = ObjectHandle::from_stack(sq, -1);
+    fn from_stack(sq: &'_ Squirrel, idx: Integer) -> Result<Self> {
+        let obj = ObjectHandle::from_stack(sq, idx);
         if obj.obj._type == tagSQObjectType_OT_NULL {
             Ok(())
         } else {
@@ -683,11 +683,11 @@ impl FromSquirrel<'_> for () {
 }
 
 impl FromSquirrel<'_> for bool {
-    fn from_top(sq: &Squirrel) -> Result<Self> {
-        assert_valid_stack_idx(sq.vm, -1);
+    fn from_stack(sq: &Squirrel, idx: Integer) -> Result<Self> {
+        assert_valid_stack_idx(sq.vm, idx);
 
         let mut out: SQBool = 0;
-        if unsafe { sq_getbool(sq.vm, -1, &mut out) }.is_error() {
+        if unsafe { sq_getbool(sq.vm, idx, &mut out) }.is_error() {
             return Err(Error::Type { expected: "bool" });
         }
         Ok(out != 0)
@@ -695,11 +695,11 @@ impl FromSquirrel<'_> for bool {
 }
 
 impl FromSquirrel<'_> for Integer {
-    fn from_top(sq: &Squirrel) -> Result<Self> {
-        assert_valid_stack_idx(sq.vm, -1);
+    fn from_stack(sq: &Squirrel, idx: Integer) -> Result<Self> {
+        assert_valid_stack_idx(sq.vm, idx);
 
         let mut out: SQInteger = 0;
-        if unsafe { sq_getinteger(sq.vm, -1, &mut out) }.is_error() {
+        if unsafe { sq_getinteger(sq.vm, idx, &mut out) }.is_error() {
             return Err(Error::Type {
                 expected: "integer",
             });
@@ -709,11 +709,11 @@ impl FromSquirrel<'_> for Integer {
 }
 
 impl FromSquirrel<'_> for Float {
-    fn from_top(sq: &Squirrel) -> Result<Self> {
-        assert_valid_stack_idx(sq.vm, -1);
+    fn from_stack(sq: &Squirrel, idx: Integer) -> Result<Self> {
+        assert_valid_stack_idx(sq.vm, idx);
 
         let mut out: SQFloat = 0.0;
-        if unsafe { sq_getfloat(sq.vm, -1, &mut out) }.is_error() {
+        if unsafe { sq_getfloat(sq.vm, idx, &mut out) }.is_error() {
             return Err(Error::Type { expected: "float" });
         }
         Ok(out)
@@ -721,8 +721,8 @@ impl FromSquirrel<'_> for Float {
 }
 
 impl<'vm> FromSquirrel<'vm> for SqString<'vm> {
-    fn from_top(sq: &'vm Squirrel) -> Result<Self> {
-        SqString::from_stack(sq, -1)
+    fn from_stack(sq: &'vm Squirrel, idx: Integer) -> Result<Self> {
+        SqString::from_stack(sq, idx)
     }
 }
 
@@ -730,8 +730,8 @@ macro_rules! handle_from_squirrel {
     ($(($t:ident, $tag:ident, $name:literal)),*) => {
         $(
             impl<'vm> FromSquirrel<'vm> for $t<'vm> {
-                fn from_top(sq: &'vm Squirrel) -> Result<Self> {
-                    let handle = ObjectHandle::from_stack(sq, -1);
+                fn from_stack(sq: &'vm Squirrel, idx: Integer) -> Result<Self> {
+                    let handle = ObjectHandle::from_stack(sq, idx);
                     if handle.obj._type != $tag {
                         return Err(Error::Type { expected: $name });
                     }
@@ -760,8 +760,8 @@ handle_from_squirrel!(
 );
 
 impl<'vm> FromSquirrel<'vm> for Value<'vm> {
-    fn from_top(sq: &'vm Squirrel) -> Result<Self> {
-        Ok(ObjectHandle::from_stack(sq, -1).to_value())
+    fn from_stack(sq: &'vm Squirrel, idx: Integer) -> Result<Self> {
+        Ok(ObjectHandle::from_stack(sq, idx).to_value())
     }
 }
 
@@ -877,6 +877,21 @@ impl IntoArgs for () {
     }
 }
 
+pub trait FromArgs<'vm>: Sized {
+    fn from_args(sq: &'vm Squirrel, count: SQInteger) -> Result<Self>;
+}
+
+impl<'vm> FromArgs<'vm> for () {
+    fn from_args(_sq: &'vm Squirrel, count: SQInteger) -> Result<Self> {
+        if count != 0 {
+            return Err(Error::Type {
+                expected: "0 arguments",
+            });
+        }
+        Ok(())
+    }
+}
+
 macro_rules! count_args {
     ($($_:tt),+) => {
         <[()]>::len(&[$( count_args!(@unit $_) ),+])
@@ -895,14 +910,47 @@ macro_rules! impl_into_args_tuple {
     }
 }
 
+macro_rules! impl_from_args_tuple {
+    ($($field:tt = $name:ident),+ $(,)?) => {
+        impl<'vm, $($name: FromSquirrel<'vm>),+> FromArgs<'vm> for ($($name,)+) {
+            fn from_args(sq: &'vm Squirrel, count: SQInteger) -> Result<Self> {
+                if count != (count_args!($($name),+) as SQInteger) {
+                    return Err(Error::Type {
+                        expected: concat!(stringify!(count_args!($($name),+)), " arguments"),
+                    })
+                }
+
+                Ok(( $($name::from_stack(sq, $field + 2)?,)+ ))
+            }
+        }
+    }
+}
+
 impl_into_args_tuple!(0 = T0);
+impl_from_args_tuple!(0 = T0);
 impl_into_args_tuple!(0 = T0, 1 = T1);
+impl_from_args_tuple!(0 = T0, 1 = T1);
 impl_into_args_tuple!(0 = T0, 1 = T1, 2 = T2);
+impl_from_args_tuple!(0 = T0, 1 = T1, 2 = T2);
 impl_into_args_tuple!(0 = T0, 1 = T1, 2 = T2, 3 = T3);
+impl_from_args_tuple!(0 = T0, 1 = T1, 2 = T2, 3 = T3);
 impl_into_args_tuple!(0 = T0, 1 = T1, 2 = T2, 3 = T3, 4 = T4);
+impl_from_args_tuple!(0 = T0, 1 = T1, 2 = T2, 3 = T3, 4 = T4);
 impl_into_args_tuple!(0 = T0, 1 = T1, 2 = T2, 3 = T3, 4 = T4, 5 = T5);
+impl_from_args_tuple!(0 = T0, 1 = T1, 2 = T2, 3 = T3, 4 = T4, 5 = T5);
 impl_into_args_tuple!(0 = T0, 1 = T1, 2 = T2, 3 = T3, 4 = T4, 5 = T5, 6 = T6);
+impl_from_args_tuple!(0 = T0, 1 = T1, 2 = T2, 3 = T3, 4 = T4, 5 = T5, 6 = T6);
 impl_into_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+);
+impl_from_args_tuple!(
     0 = T0,
     1 = T1,
     2 = T2,
@@ -923,7 +971,30 @@ impl_into_args_tuple!(
     7 = T7,
     8 = T8,
 );
+impl_from_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+);
 impl_into_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+    9 = T9,
+);
+impl_from_args_tuple!(
     0 = T0,
     1 = T1,
     2 = T2,
@@ -948,7 +1019,34 @@ impl_into_args_tuple!(
     9 = T9,
     10 = T10,
 );
+impl_from_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+    9 = T9,
+    10 = T10,
+);
 impl_into_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+    9 = T9,
+    10 = T10,
+    11 = T11,
+);
+impl_from_args_tuple!(
     0 = T0,
     1 = T1,
     2 = T2,
@@ -977,7 +1075,38 @@ impl_into_args_tuple!(
     11 = T11,
     12 = T12,
 );
+impl_from_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+    9 = T9,
+    10 = T10,
+    11 = T11,
+    12 = T12,
+);
 impl_into_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+    9 = T9,
+    10 = T10,
+    11 = T11,
+    12 = T12,
+    13 = T13,
+);
+impl_from_args_tuple!(
     0 = T0,
     1 = T1,
     2 = T2,
@@ -1010,7 +1139,42 @@ impl_into_args_tuple!(
     13 = T13,
     14 = T14,
 );
+impl_from_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+    9 = T9,
+    10 = T10,
+    11 = T11,
+    12 = T12,
+    13 = T13,
+    14 = T14,
+);
 impl_into_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+    9 = T9,
+    10 = T10,
+    11 = T11,
+    12 = T12,
+    13 = T13,
+    14 = T14,
+    15 = T15,
+);
+impl_from_args_tuple!(
     0 = T0,
     1 = T1,
     2 = T2,
