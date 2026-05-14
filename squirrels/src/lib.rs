@@ -121,7 +121,7 @@ impl Drop for Squirrel {
 
 fn get_runtime_error(sq: &Squirrel) -> Value<'_> {
     unsafe { sq_getlasterror(sq.vm) };
-    let err = ObjectHandle::from_stack(sq, -1);
+    let err = Object::from_stack(sq, -1);
     sq.pop(1);
     err.to_value()
 }
@@ -197,7 +197,7 @@ impl Squirrel {
     pub fn root_table(&self) -> Table<'_> {
         let mut root = self.root;
         unsafe { sq_addref(self.vm, &mut root) };
-        Table(ObjectHandle {
+        Table(Object {
             vm: self,
             obj: root,
         })
@@ -272,12 +272,12 @@ fn assert_valid_stack_idx(vm: HSQUIRRELVM, idx: SQInteger) {
 }
 
 /// A handle to a Squirrel ref-counted object.
-pub struct ObjectHandle<'vm> {
+pub struct Object<'vm> {
     vm: &'vm Squirrel,
     obj: HSQOBJECT,
 }
 
-impl<'vm> ObjectHandle<'vm> {
+impl<'vm> Object<'vm> {
     pub(crate) fn from_stack(sq: &'vm Squirrel, idx: SQInteger) -> Self {
         assert_valid_stack_idx(sq.vm, idx);
 
@@ -313,7 +313,7 @@ impl<'vm> ObjectHandle<'vm> {
             tagSQObjectType_OT_FLOAT => Value::Float(unsafe { self.obj._unVal.fFloat }),
             tagSQObjectType_OT_BOOL => Value::Bool(unsafe { self.obj._unVal.nInteger } != 0),
             tagSQObjectType_OT_STRING => Value::String(
-                SqString::from_handle(self).expect("OT_STRING handle materializes as SqString"),
+                SqString::from_object(self).expect("OT_STRING object materializes as SqString"),
             ),
             tagSQObjectType_OT_TABLE => Value::Table(Table(self)),
             tagSQObjectType_OT_ARRAY => Value::Array(Array(self)),
@@ -333,34 +333,34 @@ impl<'vm> ObjectHandle<'vm> {
     }
 }
 
-impl Drop for ObjectHandle<'_> {
+impl Drop for Object<'_> {
     fn drop(&mut self) {
         unsafe { sq_release(self.vm.vm, &mut self.obj) };
     }
 }
 
 pub struct SqString<'vm> {
-    handle: ObjectHandle<'vm>,
+    object: Object<'vm>,
     ptr: *const SQChar,
     len: usize,
 }
 
 impl<'vm> SqString<'vm> {
-    pub(crate) fn from_handle(handle: ObjectHandle<'vm>) -> Result<Self> {
-        if handle.obj._type != tagSQObjectType_OT_STRING {
+    pub(crate) fn from_object(object: Object<'vm>) -> Result<Self> {
+        if object.obj._type != tagSQObjectType_OT_STRING {
             return Err(Error::Type { expected: "string" });
         }
 
         // First we must push the string onto the stack because we can't get its stack index
-        // from its handle, if it has any.
-        handle.push();
+        // from its object handle, if it has any.
+        object.push();
 
         let mut ptr: *const SQChar = std::ptr::null();
         let mut len: SQInteger = 0;
-        let ret = unsafe { sq_getstringandsize(handle.vm.vm, -1, &mut ptr, &mut len) };
+        let ret = unsafe { sq_getstringandsize(object.vm.vm, -1, &mut ptr, &mut len) };
 
         // Pop before we check for an error to avoid leaving the stack in an invalid state.
-        handle.vm.pop(1);
+        object.vm.pop(1);
 
         assert!(
             !ret.is_error(),
@@ -368,15 +368,15 @@ impl<'vm> SqString<'vm> {
         );
 
         Ok(Self {
-            handle,
+            object,
             ptr,
             len: len as usize,
         })
     }
 
     pub(crate) fn from_stack(sq: &'vm Squirrel, idx: SQInteger) -> Result<Self> {
-        let handle = ObjectHandle::from_stack(sq, idx);
-        if handle.obj._type != tagSQObjectType_OT_STRING {
+        let object = Object::from_stack(sq, idx);
+        if object.obj._type != tagSQObjectType_OT_STRING {
             return Err(Error::Type { expected: "string" });
         }
 
@@ -389,7 +389,7 @@ impl<'vm> SqString<'vm> {
         );
 
         Ok(Self {
-            handle,
+            object,
             ptr,
             len: len as usize,
         })
@@ -417,13 +417,13 @@ fn test_string_from_stack() {
 }
 
 #[test]
-fn test_value_from_object_handle() {
+fn test_value_from_object() {
     let sq = Squirrel::new(1024);
     let v = sq.eval::<Value>("return 123").unwrap();
     assert!(matches!(v, Value::Integer(123)));
 }
 
-pub struct Table<'vm>(ObjectHandle<'vm>);
+pub struct Table<'vm>(Object<'vm>);
 
 impl<'vm> Table<'vm> {
     pub fn get<K, V>(&self, key: K) -> Result<Option<V>>
@@ -504,7 +504,7 @@ fn table_set_error() {
     assert!(matches!(err, CallError::Runtime(_)));
 }
 
-pub struct Array<'vm>(ObjectHandle<'vm>);
+pub struct Array<'vm>(Object<'vm>);
 
 impl<'vm> Array<'vm> {
     pub fn get<V: FromSquirrel<'vm>>(&self, idx: Integer) -> Result<Option<V>> {
@@ -524,9 +524,9 @@ impl<'vm> Array<'vm> {
     }
 }
 
-pub struct UserData<'vm>(ObjectHandle<'vm>);
+pub struct UserData<'vm>(Object<'vm>);
 
-pub struct Closure<'vm>(ObjectHandle<'vm>);
+pub struct Closure<'vm>(Object<'vm>);
 
 impl<'vm> Closure<'vm> {
     pub fn call<A: IntoArgs, T: FromSquirrel<'vm>>(&self, args: A) -> CallResult<'vm, T> {
@@ -606,19 +606,19 @@ fn closure_call_no_stack_leak() {
     assert_eq!(sq.stack_depth(), 0);
 }
 
-pub struct NativeClosure<'vm>(ObjectHandle<'vm>);
+pub struct NativeClosure<'vm>(Object<'vm>);
 
-pub struct Generator<'vm>(ObjectHandle<'vm>);
+pub struct Generator<'vm>(Object<'vm>);
 
 pub struct UserPointer(*mut c_void);
 
-pub struct Thread<'vm>(ObjectHandle<'vm>);
+pub struct Thread<'vm>(Object<'vm>);
 
-pub struct Class<'vm>(ObjectHandle<'vm>);
+pub struct Class<'vm>(Object<'vm>);
 
-pub struct Instance<'vm>(ObjectHandle<'vm>);
+pub struct Instance<'vm>(Object<'vm>);
 
-pub struct WeakRef<'vm>(ObjectHandle<'vm>);
+pub struct WeakRef<'vm>(Object<'vm>);
 
 pub enum Value<'vm> {
     Null,
@@ -673,7 +673,7 @@ pub trait FromSquirrel<'vm>: Sized {
 
 impl FromSquirrel<'_> for () {
     fn from_stack(sq: &'_ Squirrel, idx: Integer) -> Result<Self> {
-        let obj = ObjectHandle::from_stack(sq, idx);
+        let obj = Object::from_stack(sq, idx);
         if obj.obj._type == tagSQObjectType_OT_NULL {
             Ok(())
         } else {
@@ -726,23 +726,23 @@ impl<'vm> FromSquirrel<'vm> for SqString<'vm> {
     }
 }
 
-macro_rules! handle_from_squirrel {
+macro_rules! object_from_squirrel {
     ($(($t:ident, $tag:ident, $name:literal)),*) => {
         $(
             impl<'vm> FromSquirrel<'vm> for $t<'vm> {
                 fn from_stack(sq: &'vm Squirrel, idx: Integer) -> Result<Self> {
-                    let handle = ObjectHandle::from_stack(sq, idx);
-                    if handle.obj._type != $tag {
+                    let object = Object::from_stack(sq, idx);
+                    if object.obj._type != $tag {
                         return Err(Error::Type { expected: $name });
                     }
-                    Ok($t(handle))
+                    Ok($t(object))
                 }
             }
         )*
     };
 }
 
-handle_from_squirrel!(
+object_from_squirrel!(
     (Table, tagSQObjectType_OT_TABLE, "table"),
     (Array, tagSQObjectType_OT_ARRAY, "array"),
     (UserData, tagSQObjectType_OT_USERDATA, "userdata"),
@@ -761,7 +761,7 @@ handle_from_squirrel!(
 
 impl<'vm> FromSquirrel<'vm> for Value<'vm> {
     fn from_stack(sq: &'vm Squirrel, idx: Integer) -> Result<Self> {
-        Ok(ObjectHandle::from_stack(sq, idx).to_value())
+        Ok(Object::from_stack(sq, idx).to_value())
     }
 }
 
@@ -796,10 +796,10 @@ impl IntoSquirrel for bool {
 impl IntoSquirrel for SqString<'_> {
     fn push_to(&self, sq: &Squirrel) {
         assert!(
-            std::ptr::eq(self.handle.vm as *const _, sq.vm as *const _),
-            "pushing handle to a different VM"
+            std::ptr::eq(self.object.vm as *const _, sq.vm as *const _),
+            "pushing object to a different VM"
         );
-        self.handle.push();
+        self.object.push();
     }
 }
 
@@ -815,14 +815,14 @@ impl IntoSquirrel for String {
     }
 }
 
-macro_rules! handle_into_squirrel {
+macro_rules! object_into_squirrel {
     ($($t:ident),*) => {
         $(
             impl IntoSquirrel for $t<'_> {
                 fn push_to(&self, sq: &Squirrel) {
                     assert!(
                         std::ptr::eq(self.0.vm.vm as *const _, sq.vm as *const _),
-                        "pushing handle to a different VM"
+                        "pushing object to a different VM"
                     );
                     self.0.push();
                 }
@@ -831,7 +831,7 @@ macro_rules! handle_into_squirrel {
     }
 }
 
-handle_into_squirrel!(
+object_into_squirrel!(
     Table,
     Array,
     UserData,
