@@ -1,4 +1,5 @@
 mod compiler_error_handler;
+mod object;
 
 use std::{
     ffi::{CStr, CString, c_char, c_void},
