@@ -1,5 +1,8 @@
+mod array;
 mod compiler_error_handler;
 mod object;
+mod string;
+mod value;
 
 use std::{
     ffi::{CStr, CString, c_char, c_void},
@@ -8,19 +11,21 @@ use std::{
 
 use squirrels_sys::{
     HSQOBJECT, HSQUIRRELVM, SQ_VMSTATE_IDLE, SQ_VMSTATE_RUNNING, SQ_VMSTATE_SUSPENDED, SQBool,
-    SQChar, SQFalse, SQFloat, SQInteger, SQTrue, SQUnsignedInteger, SQUserPointer, sq_addref,
-    sq_call, sq_close, sq_compilebuffer, sq_get, sq_getbool, sq_getfloat, sq_getinteger,
-    sq_getlasterror, sq_getrefcount, sq_getstackobj, sq_getstringandsize, sq_gettop,
-    sq_getuserdata, sq_getvmstate, sq_newclosure, sq_newslot, sq_newuserdata, sq_open, sq_pop,
-    sq_push, sq_pushbool, sq_pushfloat, sq_pushinteger, sq_pushnull, sq_pushobject,
-    sq_pushroottable, sq_pushstring, sq_release, sq_resetobject, sq_setreleasehook, sq_throwerror,
-    sq_throwobject, tagSQObjectType_OT_ARRAY, tagSQObjectType_OT_BOOL, tagSQObjectType_OT_CLASS,
-    tagSQObjectType_OT_CLOSURE, tagSQObjectType_OT_FLOAT, tagSQObjectType_OT_GENERATOR,
-    tagSQObjectType_OT_INSTANCE, tagSQObjectType_OT_INTEGER, tagSQObjectType_OT_NATIVECLOSURE,
-    tagSQObjectType_OT_NULL, tagSQObjectType_OT_STRING, tagSQObjectType_OT_TABLE,
-    tagSQObjectType_OT_THREAD, tagSQObjectType_OT_USERDATA, tagSQObjectType_OT_USERPOINTER,
-    tagSQObjectType_OT_WEAKREF,
+    SQFalse, SQFloat, SQInteger, SQTrue, SQUnsignedInteger, SQUserPointer, sq_addref, sq_call,
+    sq_close, sq_compilebuffer, sq_get, sq_getbool, sq_getfloat, sq_getinteger, sq_getlasterror,
+    sq_getstackobj, sq_gettop, sq_getuserdata, sq_getvmstate, sq_newclosure, sq_newslot,
+    sq_newuserdata, sq_open, sq_pop, sq_push, sq_pushbool, sq_pushfloat, sq_pushinteger,
+    sq_pushnull, sq_pushobject, sq_pushroottable, sq_release, sq_resetobject, sq_setreleasehook,
+    sq_throwerror, sq_throwobject, tagSQObjectType_OT_ARRAY, tagSQObjectType_OT_CLASS,
+    tagSQObjectType_OT_CLOSURE, tagSQObjectType_OT_GENERATOR, tagSQObjectType_OT_INSTANCE,
+    tagSQObjectType_OT_NATIVECLOSURE, tagSQObjectType_OT_NULL, tagSQObjectType_OT_TABLE,
+    tagSQObjectType_OT_THREAD, tagSQObjectType_OT_USERDATA, tagSQObjectType_OT_WEAKREF,
 };
+
+pub use crate::array::Array;
+pub use crate::object::{Object, ObjectType};
+pub use crate::string::String;
+pub use crate::value::Value;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -30,8 +35,8 @@ pub type CallResult<'vm, T> = std::result::Result<T, CallError<'vm>>;
 pub enum Error {
     #[error("compile error at {source_name}:{line}:{column}: description")]
     Compile {
-        description: String,
-        source_name: String,
+        description: std::string::String,
+        source_name: std::string::String,
         line: SQInteger,
         column: SQInteger,
     },
@@ -141,7 +146,7 @@ fn get_runtime_error(sq: &Squirrel) -> Value<'_> {
     unsafe { sq_getlasterror(sq.vm) };
     let err = Object::from_stack(sq, -1);
     sq.pop(1);
-    err.to_value()
+    err.into_value()
 }
 
 extern "C" fn closure_release_hook<F>(payload: SQUserPointer, _size: SQInteger) -> SQInteger {
@@ -274,7 +279,7 @@ impl Squirrel {
         let mut root = self.root;
         unsafe { sq_addref(self.vm, &mut root) };
         Table(Object {
-            vm: self,
+            sq: self,
             obj: root,
         })
     }
@@ -291,6 +296,12 @@ impl Squirrel {
         );
         assert!(count > 0);
         unsafe { sq_pop(self.vm, count) };
+    }
+
+    pub(crate) fn assert_valid_idx(&self, idx: Integer) {
+        let top = self.stack_depth();
+        let valid = idx != 0 && if idx > 0 { idx <= top } else { idx >= -top };
+        assert!(valid, "invalid stack index {idx} (top={top})")
     }
 
     // NOTE: closures created by this function do not allow Squirrel objects to be
@@ -408,158 +419,6 @@ fn assert_valid_stack_idx(vm: HSQUIRRELVM, idx: SQInteger) {
     assert!(valid, "invalid stack index {idx} (top={top})")
 }
 
-/// A handle to a Squirrel ref-counted object.
-pub struct Object<'vm> {
-    vm: &'vm Squirrel,
-    obj: HSQOBJECT,
-}
-
-impl<'vm> Object<'vm> {
-    pub(crate) fn from_stack(sq: &'vm Squirrel, idx: SQInteger) -> Self {
-        assert_valid_stack_idx(sq.vm, idx);
-
-        // Initialize the object
-        let mut obj: HSQOBJECT = unsafe { std::mem::zeroed() };
-        unsafe { sq_resetobject(&mut obj) };
-
-        // Get it from the stack
-        let ret = unsafe { sq_getstackobj(sq.vm, idx, &mut obj) };
-        assert!(!ret.is_error(), "sq_getstackobj failed for idx {idx}");
-
-        // Increment the refcount
-        unsafe { sq_addref(sq.vm, &mut obj) };
-
-        Self { vm: sq, obj }
-    }
-
-    pub(crate) fn push(&self) {
-        unsafe { sq_pushobject(self.vm.vm, self.obj) };
-    }
-
-    /// Get the ref count of this object.
-    pub fn ref_count(&self) -> UnsignedInteger {
-        let mut obj = self.obj;
-        unsafe { sq_getrefcount(self.vm.vm, &mut obj) }
-    }
-
-    #[allow(non_upper_case_globals)]
-    pub fn to_value(self) -> Value<'vm> {
-        match self.obj._type {
-            tagSQObjectType_OT_NULL => Value::Null,
-            tagSQObjectType_OT_INTEGER => Value::Integer(unsafe { self.obj._unVal.nInteger }),
-            tagSQObjectType_OT_FLOAT => Value::Float(unsafe { self.obj._unVal.fFloat }),
-            tagSQObjectType_OT_BOOL => Value::Bool(unsafe { self.obj._unVal.nInteger } != 0),
-            tagSQObjectType_OT_STRING => Value::String(
-                SqString::from_object(self).expect("OT_STRING object materializes as SqString"),
-            ),
-            tagSQObjectType_OT_TABLE => Value::Table(Table(self)),
-            tagSQObjectType_OT_ARRAY => Value::Array(Array(self)),
-            tagSQObjectType_OT_USERDATA => Value::UserData(UserData(self)),
-            tagSQObjectType_OT_CLOSURE => Value::Closure(Closure(self)),
-            tagSQObjectType_OT_NATIVECLOSURE => Value::NativeClosure(NativeClosure(self)),
-            tagSQObjectType_OT_GENERATOR => Value::Generator(Generator(self)),
-            tagSQObjectType_OT_USERPOINTER => {
-                Value::UserPointer(UserPointer(unsafe { self.obj._unVal.pUserPointer }))
-            }
-            tagSQObjectType_OT_THREAD => Value::Thread(Thread(self)),
-            tagSQObjectType_OT_CLASS => Value::Class(Class(self)),
-            tagSQObjectType_OT_INSTANCE => Value::Instance(Instance(self)),
-            tagSQObjectType_OT_WEAKREF => Value::WeakRef(WeakRef(self)),
-            t => panic!("Squirrel VM returned an invalid object type: {t:?}"),
-        }
-    }
-}
-
-impl Drop for Object<'_> {
-    fn drop(&mut self) {
-        unsafe { sq_release(self.vm.vm, &mut self.obj) };
-    }
-}
-
-pub struct SqString<'vm> {
-    object: Object<'vm>,
-    ptr: *const SQChar,
-    len: usize,
-}
-
-impl<'vm> SqString<'vm> {
-    pub(crate) fn from_object(object: Object<'vm>) -> Result<Self> {
-        if object.obj._type != tagSQObjectType_OT_STRING {
-            return Err(Error::Type { expected: "string" });
-        }
-
-        // First we must push the string onto the stack because we can't get its stack index
-        // from its object handle, if it has any.
-        object.push();
-
-        let mut ptr: *const SQChar = std::ptr::null();
-        let mut len: SQInteger = 0;
-        let ret = unsafe { sq_getstringandsize(object.vm.vm, -1, &mut ptr, &mut len) };
-
-        // Pop before we check for an error to avoid leaving the stack in an invalid state.
-        object.vm.pop(1);
-
-        assert!(
-            !ret.is_error(),
-            "sq_getstringandsize failed on a verified OT_STRING"
-        );
-
-        Ok(Self {
-            object,
-            ptr,
-            len: len as usize,
-        })
-    }
-
-    pub(crate) fn from_stack(sq: &'vm Squirrel, idx: SQInteger) -> Result<Self> {
-        let object = Object::from_stack(sq, idx);
-        if object.obj._type != tagSQObjectType_OT_STRING {
-            return Err(Error::Type { expected: "string" });
-        }
-
-        let mut ptr: *const SQChar = std::ptr::null();
-        let mut len: SQInteger = 0;
-        let ret = unsafe { sq_getstringandsize(sq.vm, idx, &mut ptr, &mut len) };
-        assert!(
-            !ret.is_error(),
-            "sq_getstringandsize failed on a verified OT_STRING"
-        );
-
-        Ok(Self {
-            object,
-            ptr,
-            len: len as usize,
-        })
-    }
-
-    pub fn as_bytes(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.ptr as *const u8, self.len) }
-    }
-
-    pub fn to_str(&self) -> std::result::Result<&str, std::str::Utf8Error> {
-        std::str::from_utf8(self.as_bytes())
-    }
-
-    pub fn from_str(sq: &'vm Squirrel, str: &str) -> Self {
-        unsafe { sq_pushstring(sq.vm, str.as_bytes().as_ptr() as *const i8, str.len() as _) };
-        SqString::from_stack(sq, -1).expect("expecting the string we just pushed")
-    }
-}
-
-#[test]
-fn test_string_from_stack() {
-    let sq = Squirrel::new(1024);
-    let str = sq.eval::<SqString>("return \"test\"").unwrap();
-    assert_eq!(str.to_str().unwrap(), "test");
-}
-
-#[test]
-fn test_value_from_object() {
-    let sq = Squirrel::new(1024);
-    let v = sq.eval::<Value>("return 123").unwrap();
-    assert!(matches!(v, Value::Integer(123)));
-}
-
 pub struct Table<'vm>(Object<'vm>);
 
 impl<'vm> Table<'vm> {
@@ -569,16 +428,16 @@ impl<'vm> Table<'vm> {
         V: FromSquirrel<'vm>,
     {
         self.0.push();
-        key.push_to(self.0.vm);
+        key.push_to(self.0.sq);
 
-        let ret = unsafe { sq_get(self.0.vm.vm, -2) };
+        let ret = unsafe { sq_get(self.0.sq.vm, -2) };
         if ret.is_error() {
-            self.0.vm.pop(1);
+            self.0.sq.pop(1);
             return Ok(None);
         }
 
-        let val = V::from_stack(self.0.vm, -1);
-        self.0.vm.pop(2);
+        let val = V::from_stack(self.0.sq, -1);
+        self.0.sq.pop(2);
         val.map(Some)
     }
 
@@ -588,19 +447,19 @@ impl<'vm> Table<'vm> {
         V: IntoSquirrel,
     {
         self.0.push();
-        key.push_to(self.0.vm);
-        value.push_to(self.0.vm);
+        key.push_to(self.0.sq);
+        value.push_to(self.0.sq);
 
-        let ret = unsafe { sq_newslot(self.0.vm.vm, -3, SQFalse as _) };
+        let ret = unsafe { sq_newslot(self.0.sq.vm, -3, SQFalse as _) };
         if ret.is_error() {
             // sq_newslot only pops k+v on success
-            self.0.vm.pop(3);
+            self.0.sq.pop(3);
 
-            return Err(CallError::Runtime(get_runtime_error(self.0.vm)));
+            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
         }
 
         // Pop the table
-        self.0.vm.pop(1);
+        self.0.sq.pop(1);
 
         Ok(())
     }
@@ -641,45 +500,25 @@ fn table_set_error() {
     assert!(matches!(err, CallError::Runtime(_)));
 }
 
-pub struct Array<'vm>(Object<'vm>);
-
-impl<'vm> Array<'vm> {
-    pub fn get<V: FromSquirrel<'vm>>(&self, idx: Integer) -> Result<Option<V>> {
-        self.0.push();
-        idx.push_to(self.0.vm);
-
-        let ret = unsafe { sq_get(self.0.vm.vm, -2) };
-        if ret.is_error() {
-            self.0.vm.pop(1);
-
-            return Ok(None);
-        }
-
-        let val = V::from_stack(self.0.vm, -1);
-        self.0.vm.pop(2);
-        val.map(Some)
-    }
-}
-
 pub struct UserData<'vm>(Object<'vm>);
 
 pub struct Closure<'vm>(Object<'vm>);
 
 impl<'vm> Closure<'vm> {
     pub fn call<A: IntoArgs, T: FromSquirrel<'vm>>(&self, args: A) -> CallResult<'vm, T> {
-        self.push_to(self.0.vm);
-        self.0.vm.push_root_table();
-        let arg_count = args.push_args(self.0.vm) + 1;
+        self.push_to(self.0.sq);
+        self.0.sq.push_root_table();
+        let arg_count = args.push_args(self.0.sq) + 1;
 
-        let ret = unsafe { sq_call(self.0.vm.vm, arg_count, SQTrue as _, SQFalse as _) };
+        let ret = unsafe { sq_call(self.0.sq.vm, arg_count, SQTrue as _, SQFalse as _) };
         if ret.is_error() {
-            self.0.vm.pop(1);
+            self.0.sq.pop(1);
 
-            return Err(CallError::Runtime(get_runtime_error(self.0.vm)));
+            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
         }
 
-        let val = T::from_stack(self.0.vm, -1);
-        self.0.vm.pop(2);
+        let val = T::from_stack(self.0.sq, -1);
+        self.0.sq.pop(2);
         Ok(val?)
     }
 }
@@ -714,7 +553,7 @@ fn closure_call_mixed_types() {
     let f: Closure = sq
         .eval("return function(s, n) { return s + n.tostring() }")
         .unwrap();
-    let val: SqString = f.call(("count: ", 9001)).unwrap();
+    let val: String = f.call(("count: ", 9001)).unwrap();
     assert_eq!(val.to_str().unwrap(), "count: 9001");
 }
 
@@ -747,19 +586,19 @@ pub struct NativeClosure<'vm>(Object<'vm>);
 
 impl<'vm> NativeClosure<'vm> {
     pub fn call<A: IntoArgs, T: FromSquirrel<'vm>>(&self, args: A) -> CallResult<'vm, T> {
-        self.push_to(self.0.vm);
-        self.0.vm.push_root_table();
-        let arg_count = args.push_args(self.0.vm) + 1;
+        self.push_to(self.0.sq);
+        self.0.sq.push_root_table();
+        let arg_count = args.push_args(self.0.sq) + 1;
 
-        let ret = unsafe { sq_call(self.0.vm.vm, arg_count, SQTrue as _, SQFalse as _) };
+        let ret = unsafe { sq_call(self.0.sq.vm, arg_count, SQTrue as _, SQFalse as _) };
         if ret.is_error() {
-            self.0.vm.pop(1);
+            self.0.sq.pop(1);
 
-            return Err(CallError::Runtime(get_runtime_error(self.0.vm)));
+            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
         }
 
-        let val = T::from_stack(self.0.vm, -1);
-        self.0.vm.pop(2);
+        let val = T::from_stack(self.0.sq, -1);
+        self.0.sq.pop(2);
         Ok(val?)
     }
 }
@@ -775,51 +614,6 @@ pub struct Class<'vm>(Object<'vm>);
 pub struct Instance<'vm>(Object<'vm>);
 
 pub struct WeakRef<'vm>(Object<'vm>);
-
-pub enum Value<'vm> {
-    Null,
-    Integer(Integer),
-    Float(Float),
-    Bool(bool),
-    String(SqString<'vm>),
-    Table(Table<'vm>),
-    Array(Array<'vm>),
-    UserData(UserData<'vm>),
-    Closure(Closure<'vm>),
-    NativeClosure(NativeClosure<'vm>),
-    Generator(Generator<'vm>),
-    UserPointer(UserPointer),
-    Thread(Thread<'vm>),
-    Class(Class<'vm>),
-    Instance(Instance<'vm>),
-    WeakRef(WeakRef<'vm>),
-}
-
-impl std::fmt::Debug for Value<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Null => write!(f, "Null"),
-            Self::Integer(n) => f.debug_tuple("Integer").field(n).finish(),
-            Self::Float(n) => f.debug_tuple("Float").field(n).finish(),
-            Self::Bool(b) => f.debug_tuple("Bool").field(b).finish(),
-            Self::String(sqstr) => f
-                .debug_tuple("String")
-                .field(&String::from_utf8_lossy(sqstr.as_bytes()))
-                .finish(),
-            Self::Table(_) => f.debug_tuple("Table").finish(),
-            Self::Array(_) => f.debug_tuple("Array").finish(),
-            Self::UserData(_) => f.debug_tuple("UserData").finish(),
-            Self::Closure(_) => f.debug_tuple("Closure").finish(),
-            Self::NativeClosure(_) => f.debug_tuple("NativeClosure").finish(),
-            Self::Generator(_) => f.debug_tuple("Generator").finish(),
-            Self::UserPointer(_) => f.debug_tuple("UserPointer").finish(),
-            Self::Thread(_) => f.debug_tuple("Thread").finish(),
-            Self::Class(_) => f.debug_tuple("Class").finish(),
-            Self::Instance(_) => f.debug_tuple("Instance").finish(),
-            Self::WeakRef(_) => f.debug_tuple("WeakRef").finish(),
-        }
-    }
-}
 
 // TODO should this trait be public?
 // If we call `from_top` on an empty stack we panic.
@@ -876,9 +670,9 @@ impl FromSquirrel<'_> for Float {
     }
 }
 
-impl<'vm> FromSquirrel<'vm> for SqString<'vm> {
+impl<'vm> FromSquirrel<'vm> for String<'vm> {
     fn from_stack(sq: &'vm Squirrel, idx: Integer) -> Result<Self> {
-        SqString::from_stack(sq, idx)
+        String::from_stack(sq, idx)
     }
 }
 
@@ -917,7 +711,7 @@ object_from_squirrel!(
 
 impl<'vm> FromSquirrel<'vm> for Value<'vm> {
     fn from_stack(sq: &'vm Squirrel, idx: Integer) -> Result<Self> {
-        Ok(Object::from_stack(sq, idx).to_value())
+        Ok(Object::from_stack(sq, idx).into_value())
     }
 }
 
@@ -949,23 +743,23 @@ impl IntoSquirrel for bool {
     }
 }
 
-impl IntoSquirrel for SqString<'_> {
+impl IntoSquirrel for String<'_> {
     fn push_to(&self, sq: &Squirrel) {
         assert!(
-            std::ptr::eq(self.object.vm as *const _, sq.vm as *const _),
+            std::ptr::eq(self.obj.sq as *const _, sq.vm as *const _),
             "pushing object to a different VM"
         );
-        self.object.push();
+        self.obj.push();
     }
 }
 
 impl IntoSquirrel for &str {
     fn push_to(&self, sq: &Squirrel) {
-        SqString::from_str(sq, self);
+        String::from_str(sq, self);
     }
 }
 
-impl IntoSquirrel for String {
+impl IntoSquirrel for std::string::String {
     fn push_to(&self, sq: &Squirrel) {
         self.as_str().push_to(sq);
     }
@@ -977,7 +771,7 @@ macro_rules! object_into_squirrel {
             impl IntoSquirrel for $t<'_> {
                 fn push_to(&self, sq: &Squirrel) {
                     assert!(
-                        std::ptr::eq(self.0.vm.vm as *const _, sq.vm as *const _),
+                        std::ptr::eq(self.0.sq.vm as *const _, sq.vm as *const _),
                         "pushing object to a different VM"
                     );
                     self.0.push();
