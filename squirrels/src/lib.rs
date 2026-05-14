@@ -1,15 +1,19 @@
 mod compiler_error_handler;
 
-use std::ffi::{CStr, c_char, c_void};
+use std::{
+    ffi::{CStr, CString, c_char, c_void},
+    panic::{AssertUnwindSafe, catch_unwind},
+};
 
 use squirrels_sys::{
     HSQOBJECT, HSQUIRRELVM, SQ_VMSTATE_IDLE, SQ_VMSTATE_RUNNING, SQ_VMSTATE_SUSPENDED, SQBool,
-    SQChar, SQFalse, SQFloat, SQInteger, SQTrue, SQUnsignedInteger, sq_addref, sq_call, sq_close,
-    sq_compilebuffer, sq_get, sq_getbool, sq_getfloat, sq_getinteger, sq_getlasterror,
-    sq_getrefcount, sq_getstackobj, sq_getstringandsize, sq_gettop, sq_getvmstate, sq_newslot,
-    sq_open, sq_pop, sq_push, sq_pushbool, sq_pushfloat, sq_pushinteger, sq_pushnull,
-    sq_pushobject, sq_pushroottable, sq_pushstring, sq_release, sq_resetobject,
-    tagSQObjectType_OT_ARRAY, tagSQObjectType_OT_BOOL, tagSQObjectType_OT_CLASS,
+    SQChar, SQFalse, SQFloat, SQInteger, SQTrue, SQUnsignedInteger, SQUserPointer, sq_addref,
+    sq_call, sq_close, sq_compilebuffer, sq_get, sq_getbool, sq_getfloat, sq_getinteger,
+    sq_getlasterror, sq_getrefcount, sq_getstackobj, sq_getstringandsize, sq_gettop,
+    sq_getuserdata, sq_getvmstate, sq_newclosure, sq_newslot, sq_newuserdata, sq_open, sq_pop,
+    sq_push, sq_pushbool, sq_pushfloat, sq_pushinteger, sq_pushnull, sq_pushobject,
+    sq_pushroottable, sq_pushstring, sq_release, sq_resetobject, sq_setreleasehook, sq_throwerror,
+    sq_throwobject, tagSQObjectType_OT_ARRAY, tagSQObjectType_OT_BOOL, tagSQObjectType_OT_CLASS,
     tagSQObjectType_OT_CLOSURE, tagSQObjectType_OT_FLOAT, tagSQObjectType_OT_GENERATOR,
     tagSQObjectType_OT_INSTANCE, tagSQObjectType_OT_INTEGER, tagSQObjectType_OT_NATIVECLOSURE,
     tagSQObjectType_OT_NULL, tagSQObjectType_OT_STRING, tagSQObjectType_OT_TABLE,
@@ -108,6 +112,19 @@ impl Squirrel {
     {
         squirrels_sys::set_error_fn(self.vm, f);
     }
+
+    // TODO replace this hack with a SquirrelRef type or something similar
+    pub(crate) unsafe fn from_raw_borrowed(vm: HSQUIRRELVM) -> std::mem::ManuallyDrop<Self> {
+        let mut root: HSQOBJECT = unsafe { std::mem::zeroed() };
+        unsafe {
+            sq_resetobject(&mut root);
+            sq_pushroottable(vm);
+            let _ = sq_getstackobj(vm, -1, &mut root);
+            sq_pop(vm, 1);
+            // not calling sq_addref intentionally
+        }
+        std::mem::ManuallyDrop::new(Squirrel { vm, root })
+    }
 }
 
 impl Drop for Squirrel {
@@ -124,6 +141,64 @@ fn get_runtime_error(sq: &Squirrel) -> Value<'_> {
     let err = Object::from_stack(sq, -1);
     sq.pop(1);
     err.to_value()
+}
+
+extern "C" fn closure_release_hook<F>(payload: SQUserPointer, _size: SQInteger) -> SQInteger {
+    let raw_f: *mut F = unsafe { *(payload as *mut *mut F) };
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        drop(unsafe { Box::from_raw(raw_f) });
+    }));
+    1
+}
+
+extern "C" fn closure_trampoline<'vm, F, A, R>(v: HSQUIRRELVM) -> SQInteger
+where
+    F: Fn(A) -> std::result::Result<R, Value<'vm>> + Send + Sync + 'static,
+    A: for<'a> FromArgs<'a>,
+    R: IntoSquirrel,
+{
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let top = unsafe { sq_gettop(v) };
+
+        let mut user_data: SQUserPointer = std::ptr::null_mut();
+        let ret = unsafe { sq_getuserdata(v, top, &mut user_data, std::ptr::null_mut()) };
+        if ret.is_error() {
+            let msg = c"expected userdata on the top of the stack";
+            return unsafe { sq_throwerror(v, msg.as_ptr()) }.0;
+        }
+        let f: &F = unsafe { &*(*(user_data as *const *const F)) };
+
+        let sq = unsafe { Squirrel::from_raw_borrowed(v) };
+        let sq: &Squirrel = &*sq;
+
+        let args = match A::from_args(sq, top - 2) {
+            Ok(a) => a,
+            Err(e) => {
+                let msg = CString::new(e.to_string())
+                    .unwrap_or_else(|_| c"native function arg extraction failed".to_owned());
+                return unsafe { sq_throwerror(v, msg.as_ptr()) }.0;
+            }
+        };
+
+        match f(args) {
+            Ok(r) => {
+                r.push_to(sq);
+                1
+            }
+            Err(value) => {
+                value.push_to(sq);
+                unsafe { sq_throwobject(v) }.0
+            }
+        }
+    }));
+
+    match result {
+        Ok(ret) => ret,
+        Err(_) => {
+            let msg = c"panic in native function";
+            unsafe { sq_throwerror(v, msg.as_ptr()) }.0
+        }
+    }
 }
 
 impl Squirrel {
@@ -216,6 +291,34 @@ impl Squirrel {
         assert!(count > 0);
         unsafe { sq_pop(self.vm, count) };
     }
+
+    // NOTE: closures created by this function do not allow Squirrel objects to be
+    // `move`d inside them because that implies `Object` can be `Send` and, in turn,
+    // `Squirrel` to be `Sync`, because dropping a reference to an object has to
+    // pass through `sq_release(&vm)` which cannot be called across threads.
+    //
+    // TODO figure out a way around this. Using Squirrel's registry seems like
+    // the best answer.
+    pub fn create_function<'vm, F, A, R>(&'vm self, f: F) -> NativeClosure<'vm>
+    where
+        F: Fn(A) -> std::result::Result<R, Value<'vm>> + Send + Sync + 'static,
+        A: for<'a> FromArgs<'a>,
+        R: IntoSquirrel,
+    {
+        let fn_ptr: *mut F = Box::into_raw(Box::new(f));
+
+        let user_data = unsafe { sq_newuserdata(self.vm, size_of::<*mut F>() as _) };
+
+        unsafe { *(user_data as *mut *mut F) = fn_ptr };
+
+        unsafe { sq_setreleasehook(self.vm, -1, Some(closure_release_hook::<F>)) };
+
+        unsafe { sq_newclosure(self.vm, Some(closure_trampoline::<'vm, F, A, R>), 1) };
+
+        let nc = NativeClosure(Object::from_stack(self, -1));
+        self.pop(1);
+        nc
+    }
 }
 
 #[test]
@@ -263,6 +366,39 @@ fn runtime_error_test() {
     let sq = Squirrel::new(1024);
     let err = sq.eval::<()>("throw 42").unwrap_err();
     assert!(matches!(err, CallError::Runtime(Value::Integer(42))));
+}
+
+#[test]
+fn create_function_test() {
+    let sq = Squirrel::new(1024);
+    let closure = sq.create_function(|(v,): (Integer,)| Ok(v + 1));
+    let result: Integer = closure.call((30,)).unwrap();
+    assert_eq!(result, 31);
+}
+
+#[test]
+fn call_native_function() {
+    let sq = Squirrel::new(1024);
+    let closure = sq.create_function(|(v,): (Integer,)| Ok(v + 1));
+    sq.root_table().set("add_one", closure).unwrap();
+    let result: Integer = sq.eval("return add_one(30)").unwrap();
+    assert_eq!(result, 31);
+}
+
+#[test]
+fn native_function_panic() {
+    let sq = Squirrel::new(1024);
+    let closure = sq.create_function::<'_, _, (), ()>(|()| panic!("bad native function"));
+    let err = closure.call::<_, ()>(()).unwrap_err();
+    assert!(matches!(err, CallError::Runtime(Value::String(_))));
+}
+
+#[test]
+fn native_function_error() {
+    let sq = Squirrel::new(1024);
+    let closure = sq.create_function::<'_, _, (), ()>(move |()| Err(Value::Integer(123)));
+    let err = closure.call::<_, ()>(()).unwrap_err();
+    assert!(matches!(err, CallError::Runtime(Value::Integer(123))));
 }
 
 fn assert_valid_stack_idx(vm: HSQUIRRELVM, idx: SQInteger) {
@@ -607,6 +743,25 @@ fn closure_call_no_stack_leak() {
 }
 
 pub struct NativeClosure<'vm>(Object<'vm>);
+
+impl<'vm> NativeClosure<'vm> {
+    pub fn call<A: IntoArgs, T: FromSquirrel<'vm>>(&self, args: A) -> CallResult<'vm, T> {
+        self.push_to(self.0.vm);
+        self.0.vm.push_root_table();
+        let arg_count = args.push_args(self.0.vm) + 1;
+
+        let ret = unsafe { sq_call(self.0.vm.vm, arg_count, SQTrue as _, SQFalse as _) };
+        if ret.is_error() {
+            self.0.vm.pop(1);
+
+            return Err(CallError::Runtime(get_runtime_error(self.0.vm)));
+        }
+
+        let val = T::from_stack(self.0.vm, -1);
+        self.0.vm.pop(2);
+        Ok(val?)
+    }
+}
 
 pub struct Generator<'vm>(Object<'vm>);
 
