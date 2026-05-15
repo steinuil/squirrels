@@ -150,6 +150,54 @@ impl IntoSquirrel<'_> for bool {
     }
 }
 
+/// Implement object traits on object newtype wrappers.
+macro_rules! impl_object_traits {
+    ($type:ident, $tag:expr, $name:literal) => {
+        impl<'vm> $crate::FromSquirrel<'vm> for $type<'vm> {
+            fn from_squirrel(
+                value: $crate::Value<'vm>,
+                sq: &'vm $crate::Squirrel,
+            ) -> $crate::Result<Self> {
+                if let $crate::Value::$type(o) = value {
+                    o.0.sq.assert_same_vm(sq);
+                    Ok(o)
+                } else {
+                    Err($crate::Error::Type { expected: $name })
+                }
+            }
+
+            unsafe fn from_stack(
+                idx: $crate::Integer,
+                sq: &'vm $crate::Squirrel,
+            ) -> $crate::Result<Self> {
+                let object = $crate::Object::from_stack(idx, sq);
+
+                if object.obj._type == $tag {
+                    Ok($type(object))
+                } else {
+                    Err(Error::Type { expected: "array" })
+                }
+            }
+        }
+
+        impl<'vm> $crate::IntoSquirrel<'vm> for $type<'vm> {
+            fn into_squirrel(self, sq: &'vm $crate::Squirrel) -> $crate::Value<'vm> {
+                self.0.sq.assert_same_vm(sq);
+                Value::$type(self)
+            }
+        }
+
+        unsafe impl<'vm> $crate::PushIntoStack for $type<'vm> {
+            fn push_into_stack(self, sq: &$crate::Squirrel) {
+                self.0.sq.assert_same_vm(sq);
+                self.0.push_into_stack();
+            }
+        }
+    };
+}
+
+pub(crate) use impl_object_traits;
+
 mod sealed {
     pub trait Sealed {}
 }

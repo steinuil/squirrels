@@ -15,6 +15,26 @@ use crate::{
     Thread, UnsignedInteger, UserData, UserPointer, Value, WeakRef,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ObjectType {
+    Null,
+    Integer,
+    Float,
+    Bool,
+    String,
+    Table,
+    Array,
+    UserData,
+    Closure,
+    NativeClosure,
+    Generator,
+    UserPointer,
+    Thread,
+    Class,
+    Instance,
+    WeakRef,
+}
+
 /// Handle to a Squirrel ref-counted object.
 pub struct Object<'vm> {
     pub(crate) sq: &'vm Squirrel,
@@ -194,24 +214,4 @@ impl std::fmt::Debug for Object<'_> {
             | ObjectType::WeakRef => write!(f, "Object({:p})", self.as_pointer()),
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ObjectType {
-    Null,
-    Integer,
-    Float,
-    Bool,
-    String,
-    Table,
-    Array,
-    UserData,
-    Closure,
-    NativeClosure,
-    Generator,
-    UserPointer,
-    Thread,
-    Class,
-    Instance,
-    WeakRef,
 }

@@ -1,4 +1,5 @@
 mod array;
+mod closure;
 mod compiler_error_handler;
 mod object;
 mod string;
@@ -18,12 +19,12 @@ use squirrels_sys::{
     sq_newclosure, sq_newuserdata, sq_open, sq_pop, sq_push, sq_pushbool, sq_pushfloat,
     sq_pushinteger, sq_pushnull, sq_pushobject, sq_pushroottable, sq_pushuserpointer, sq_release,
     sq_resetobject, sq_setreleasehook, sq_throwerror, sq_throwobject, tagSQObjectType_OT_CLASS,
-    tagSQObjectType_OT_CLOSURE, tagSQObjectType_OT_GENERATOR, tagSQObjectType_OT_INSTANCE,
-    tagSQObjectType_OT_NATIVECLOSURE, tagSQObjectType_OT_THREAD, tagSQObjectType_OT_USERDATA,
-    tagSQObjectType_OT_WEAKREF,
+    tagSQObjectType_OT_GENERATOR, tagSQObjectType_OT_INSTANCE, tagSQObjectType_OT_THREAD,
+    tagSQObjectType_OT_USERDATA, tagSQObjectType_OT_WEAKREF,
 };
 
 pub use crate::array::Array;
+pub use crate::closure::{Closure, NativeClosure};
 pub use crate::string::String;
 pub use crate::table::Table;
 pub use crate::traits::{FromArgs, FromSquirrel, IntoArgs, IntoSquirrel, PushIntoStack};
@@ -359,7 +360,10 @@ impl Squirrel {
             | Value::Thread(Thread(obj))
             | Value::Class(Class(obj))
             | Value::Instance(Instance(obj))
-            | Value::WeakRef(WeakRef(obj)) => obj.push_into_stack(),
+            | Value::WeakRef(WeakRef(obj)) => {
+                self.assert_same_vm(obj.sq);
+                obj.push_into_stack()
+            }
         }
     }
 }
@@ -446,107 +450,6 @@ fn native_function_error() {
 
 pub struct UserData<'vm>(Object<'vm>);
 
-pub struct Closure<'vm>(Object<'vm>);
-
-impl<'vm> Closure<'vm> {
-    pub fn call<A: IntoArgs, T: FromSquirrel<'vm>>(&self, args: A) -> CallResult<'vm, T> {
-        self.0.push_into_stack();
-        self.0.sq.push_root_table();
-        let arg_count = args.push_args(self.0.sq) + 1;
-
-        let ret = unsafe { sq_call(self.0.sq.vm, arg_count, SQTrue as _, SQFalse as _) };
-        if ret.is_error() {
-            self.0.sq.pop(1);
-
-            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
-        }
-
-        let val = unsafe { T::from_stack(-1, self.0.sq) };
-        self.0.sq.pop(2);
-        Ok(val?)
-    }
-}
-
-#[test]
-fn closure_call_no_args() {
-    let sq = Squirrel::new(1024);
-    let f: Closure = sq.eval("return function() { return 123 }").unwrap();
-    let val: Integer = f.call(()).unwrap();
-    assert_eq!(val, 123);
-}
-
-#[test]
-fn closure_call_single_arg() {
-    let sq = Squirrel::new(1024);
-    let f: Closure = sq.eval("return function(n) { return n + 1 }").unwrap();
-    let val: Integer = f.call((9000,)).unwrap();
-    assert_eq!(val, 9001);
-}
-
-#[test]
-fn closure_call_multiple_args() {
-    let sq = Squirrel::new(1024);
-    let f: Closure = sq.eval("return function(n, m) { return n + m }").unwrap();
-    let val: Integer = f.call((3, 4)).unwrap();
-    assert_eq!(val, 7);
-}
-
-#[test]
-fn closure_call_mixed_types() {
-    let sq = Squirrel::new(1024);
-    let f: Closure = sq
-        .eval("return function(s, n) { return s + n.tostring() }")
-        .unwrap();
-    let val: String = f.call(("count: ", 9001)).unwrap();
-    assert_eq!(val.to_str().unwrap(), "count: 9001");
-}
-
-#[test]
-fn closure_call_error() {
-    let sq = Squirrel::new(1024);
-    let f: Closure = sq.eval("return function(x) { throw \"error\" }").unwrap();
-    let err = f.call::<_, ()>((1,)).unwrap_err();
-    assert!(matches!(err, CallError::Runtime(Value::String(_))));
-}
-
-#[test]
-fn closure_outlives_other_evals() {
-    let sq = Squirrel::new(1024);
-    let f: Closure = sq.eval("return function(x) { return x + 1 }").unwrap();
-    let _: Integer = sq.eval("return 0").unwrap();
-    let val: Integer = f.call((10,)).unwrap();
-    assert_eq!(val, 11);
-}
-
-#[test]
-fn closure_call_no_stack_leak() {
-    let sq = Squirrel::new(1024);
-    let f: Closure = sq.eval("return function(x) { return x + 1 }").unwrap();
-    let _: Integer = f.call((10,)).unwrap();
-    assert_eq!(sq.stack_depth(), 0);
-}
-
-pub struct NativeClosure<'vm>(Object<'vm>);
-
-impl<'vm> NativeClosure<'vm> {
-    pub fn call<A: IntoArgs, T: FromSquirrel<'vm>>(&self, args: A) -> CallResult<'vm, T> {
-        self.0.push_into_stack();
-        self.0.sq.push_root_table();
-        let arg_count = args.push_args(self.0.sq) + 1;
-
-        let ret = unsafe { sq_call(self.0.sq.vm, arg_count, SQTrue as _, SQFalse as _) };
-        if ret.is_error() {
-            self.0.sq.pop(1);
-
-            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
-        }
-
-        let val = unsafe { T::from_stack(-1, self.0.sq) };
-        self.0.sq.pop(2);
-        Ok(val?)
-    }
-}
-
 pub struct Generator<'vm>(Object<'vm>);
 
 pub struct UserPointer(*mut c_void);
@@ -591,12 +494,6 @@ macro_rules! object_from_squirrel {
 
 object_from_squirrel!(
     (UserData, tagSQObjectType_OT_USERDATA, "userdata"),
-    (Closure, tagSQObjectType_OT_CLOSURE, "closure"),
-    (
-        NativeClosure,
-        tagSQObjectType_OT_NATIVECLOSURE,
-        "nativeclosure"
-    ),
     (Generator, tagSQObjectType_OT_GENERATOR, "generator"),
     (Thread, tagSQObjectType_OT_THREAD, "thread"),
     (Class, tagSQObjectType_OT_CLASS, "class"),
@@ -624,13 +521,4 @@ macro_rules! object_into_squirrel {
     }
 }
 
-object_into_squirrel!(
-    UserData,
-    Closure,
-    NativeClosure,
-    Generator,
-    Thread,
-    Class,
-    Instance,
-    WeakRef
-);
+object_into_squirrel!(UserData, Generator, Thread, Class, Instance, WeakRef);

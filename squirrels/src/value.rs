@@ -30,6 +30,29 @@ pub enum Value<'vm> {
     WeakRef(WeakRef<'vm>),
 }
 
+impl<'vm> Value<'vm> {
+    pub(crate) fn as_object(&self) -> Option<&Object<'vm>> {
+        match self {
+            Value::String(String { obj, .. })
+            | Value::Table(Table(obj))
+            | Value::Array(Array(obj))
+            | Value::UserData(UserData(obj))
+            | Value::Closure(Closure(obj))
+            | Value::NativeClosure(NativeClosure(obj))
+            | Value::Generator(Generator(obj))
+            | Value::Thread(Thread(obj))
+            | Value::Class(Class(obj))
+            | Value::Instance(Instance(obj))
+            | Value::WeakRef(WeakRef(obj)) => Some(obj),
+            Value::Null
+            | Value::Integer(_)
+            | Value::Float(_)
+            | Value::Bool(_)
+            | Value::UserPointer(_) => None,
+        }
+    }
+}
+
 impl std::fmt::Debug for Value<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -54,7 +77,11 @@ impl std::fmt::Debug for Value<'_> {
 }
 
 impl<'vm> FromSquirrel<'vm> for Value<'vm> {
-    fn from_squirrel(value: Value<'vm>, _sq: &'vm Squirrel) -> Result<Self> {
+    fn from_squirrel(value: Value<'vm>, sq: &'vm Squirrel) -> Result<Self> {
+        if let Some(obj) = value.as_object() {
+            obj.sq.assert_same_vm(sq);
+        }
+
         Ok(value)
     }
 
@@ -64,7 +91,11 @@ impl<'vm> FromSquirrel<'vm> for Value<'vm> {
 }
 
 impl<'vm> IntoSquirrel<'vm> for Value<'vm> {
-    fn into_squirrel(self, _sq: &'vm Squirrel) -> Value<'vm> {
+    fn into_squirrel(self, sq: &'vm Squirrel) -> Value<'vm> {
+        if let Some(obj) = self.as_object() {
+            obj.sq.assert_same_vm(sq);
+        }
+
         self
     }
 }

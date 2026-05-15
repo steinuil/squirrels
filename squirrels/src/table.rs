@@ -1,8 +1,8 @@
 use squirrels_sys::{SQFalse, sq_get, sq_newslot, tagSQObjectType_OT_TABLE};
 
 use crate::{
-    CallError, CallResult, Error, FromSquirrel, IntoSquirrel, Object, PushIntoStack, Result,
-    Squirrel, Value, get_runtime_error,
+    CallError, CallResult, Error, FromSquirrel, IntoSquirrel, Object, Result, Value,
+    get_runtime_error, traits::impl_object_traits,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -54,39 +54,7 @@ impl<'vm> Table<'vm> {
 
 impl Eq for Table<'_> {}
 
-impl<'vm> FromSquirrel<'vm> for Table<'vm> {
-    fn from_squirrel(value: crate::Value<'vm>, _sq: &'vm Squirrel) -> Result<Self> {
-        if let Value::Table(t) = value {
-            Ok(t)
-        } else {
-            Err(Error::Type { expected: "table" })
-        }
-    }
-
-    unsafe fn from_stack(idx: crate::Integer, sq: &'vm Squirrel) -> Result<Self> {
-        let object = Object::from_stack(idx, sq);
-
-        if object.obj._type == tagSQObjectType_OT_TABLE {
-            Ok(Table(object))
-        } else {
-            Err(Error::Type { expected: "table" })
-        }
-    }
-}
-
-impl<'vm> IntoSquirrel<'vm> for Table<'vm> {
-    fn into_squirrel(self, sq: &'vm Squirrel) -> Value<'vm> {
-        self.0.sq.assert_same_vm(sq);
-        Value::Table(self)
-    }
-}
-
-unsafe impl<'vm> PushIntoStack for Table<'vm> {
-    fn push_into_stack(self, sq: &Squirrel) {
-        self.0.sq.assert_same_vm(sq);
-        self.0.push_into_stack();
-    }
-}
+impl_object_traits!(Table, tagSQObjectType_OT_TABLE, "table");
 
 #[cfg(test)]
 mod tests {

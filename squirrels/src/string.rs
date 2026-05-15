@@ -132,8 +132,9 @@ impl std::fmt::Debug for String<'_> {
 }
 
 impl<'vm> FromSquirrel<'vm> for String<'vm> {
-    fn from_squirrel(value: crate::Value<'vm>, _sq: &'vm Squirrel) -> Result<Self> {
+    fn from_squirrel(value: crate::Value<'vm>, sq: &'vm Squirrel) -> Result<Self> {
         if let Value::String(s) = value {
+            s.obj.sq.assert_same_vm(sq);
             Ok(s)
         } else {
             Err(Error::Type { expected: "string" })
