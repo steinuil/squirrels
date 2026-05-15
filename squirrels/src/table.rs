@@ -1,12 +1,14 @@
 use squirrels_sys::{SQFalse, sq_get, sq_newslot, tagSQObjectType_OT_TABLE};
 
 use crate::{
-    CallError, CallResult, Error, FromSquirrel, IntoSquirrel, Object, Result, Value,
-    get_runtime_error, traits::impl_object_traits,
+    CallError, CallResult, FromSquirrel, IntoSquirrel, Object, Result, get_runtime_error,
+    traits::impl_object_traits,
 };
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Table<'vm>(pub(crate) Object<'vm>);
+
+impl_object_traits!(Table, tagSQObjectType_OT_TABLE, "table");
 
 impl<'vm> Table<'vm> {
     pub fn get<K, V>(&self, key: K) -> Result<Option<V>>
@@ -51,10 +53,6 @@ impl<'vm> Table<'vm> {
         Ok(())
     }
 }
-
-impl Eq for Table<'_> {}
-
-impl_object_traits!(Table, tagSQObjectType_OT_TABLE, "table");
 
 #[cfg(test)]
 mod tests {

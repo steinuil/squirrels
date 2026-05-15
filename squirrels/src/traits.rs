@@ -153,6 +153,8 @@ impl IntoSquirrel<'_> for bool {
 /// Implement object traits on object newtype wrappers.
 macro_rules! impl_object_traits {
     ($type:ident, $tag:expr, $name:literal) => {
+        impl Eq for $type<'_> {}
+
         impl<'vm> $crate::FromSquirrel<'vm> for $type<'vm> {
             fn from_squirrel(
                 value: $crate::Value<'vm>,
@@ -175,7 +177,7 @@ macro_rules! impl_object_traits {
                 if object.obj._type == $tag {
                     Ok($type(object))
                 } else {
-                    Err(Error::Type { expected: "array" })
+                    Err($crate::Error::Type { expected: "array" })
                 }
             }
         }
@@ -183,7 +185,7 @@ macro_rules! impl_object_traits {
         impl<'vm> $crate::IntoSquirrel<'vm> for $type<'vm> {
             fn into_squirrel(self, sq: &'vm $crate::Squirrel) -> $crate::Value<'vm> {
                 self.0.sq.assert_same_vm(sq);
-                Value::$type(self)
+                $crate::Value::$type(self)
             }
         }
 

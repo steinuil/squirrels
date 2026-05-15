@@ -1,14 +1,11 @@
 use squirrels_sys::{sq_get, tagSQObjectType_OT_ARRAY};
 
 use crate::{
-    Error, FromSquirrel, Integer, Object, PushIntoStack as _, Result, Value,
-    traits::impl_object_traits,
+    FromSquirrel, Integer, Object, PushIntoStack as _, Result, traits::impl_object_traits,
 };
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Array<'vm>(pub(crate) Object<'vm>);
-
-impl Eq for Array<'_> {}
 
 impl_object_traits!(Array, tagSQObjectType_OT_ARRAY, "array");
 

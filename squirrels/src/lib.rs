@@ -1,14 +1,21 @@
 mod array;
+mod class;
 mod closure;
 mod compiler_error_handler;
+mod generator;
+mod instance;
 mod object;
 mod string;
 mod table;
+mod thread;
 mod traits;
+mod user_data;
+mod user_pointer;
 mod value;
+mod weak_ref;
 
 use std::{
-    ffi::{CStr, CString, c_char, c_void},
+    ffi::{CStr, CString, c_char},
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
@@ -18,17 +25,24 @@ use squirrels_sys::{
     sq_compilebuffer, sq_getlasterror, sq_getstackobj, sq_gettop, sq_getuserdata, sq_getvmstate,
     sq_newclosure, sq_newuserdata, sq_open, sq_pop, sq_push, sq_pushbool, sq_pushfloat,
     sq_pushinteger, sq_pushnull, sq_pushobject, sq_pushroottable, sq_pushuserpointer, sq_release,
-    sq_resetobject, sq_setreleasehook, sq_throwerror, sq_throwobject, tagSQObjectType_OT_CLASS,
-    tagSQObjectType_OT_GENERATOR, tagSQObjectType_OT_INSTANCE, tagSQObjectType_OT_THREAD,
-    tagSQObjectType_OT_USERDATA, tagSQObjectType_OT_WEAKREF,
+    sq_resetobject, sq_setreleasehook, sq_throwerror, sq_throwobject,
 };
 
-pub use crate::array::Array;
-pub use crate::closure::{Closure, NativeClosure};
-pub use crate::string::String;
-pub use crate::table::Table;
-pub use crate::traits::{FromArgs, FromSquirrel, IntoArgs, IntoSquirrel, PushIntoStack};
-pub use crate::value::Value;
+pub use crate::{
+    array::Array,
+    class::Class,
+    closure::{Closure, NativeClosure},
+    generator::Generator,
+    instance::Instance,
+    string::String,
+    table::Table,
+    thread::Thread,
+    traits::{FromArgs, FromSquirrel, IntoArgs, IntoSquirrel, PushIntoStack},
+    user_data::UserData,
+    user_pointer::UserPointer,
+    value::Value,
+    weak_ref::WeakRef,
+};
 
 pub(crate) use crate::object::{Object, ObjectType};
 
@@ -349,7 +363,9 @@ impl Squirrel {
             Value::Integer(n) => unsafe { sq_pushinteger(self.vm, *n) },
             Value::Float(n) => unsafe { sq_pushfloat(self.vm, *n) },
             Value::Bool(b) => unsafe { sq_pushbool(self.vm, if *b { 1 } else { 0 }) },
-            Value::UserPointer(p) => unsafe { sq_pushuserpointer(self.vm, p.0) },
+            Value::UserPointer(p) => unsafe {
+                sq_pushuserpointer(self.vm, p.as_ptr());
+            },
             Value::String(String { obj, .. })
             | Value::Table(Table(obj))
             | Value::Array(Array(obj))
@@ -447,78 +463,3 @@ fn native_function_error() {
     let err = closure.call::<_, ()>(()).unwrap_err();
     assert!(matches!(err, CallError::Runtime(Value::Integer(123))));
 }
-
-pub struct UserData<'vm>(Object<'vm>);
-
-pub struct Generator<'vm>(Object<'vm>);
-
-pub struct UserPointer(*mut c_void);
-
-unsafe impl PushIntoStack for UserPointer {
-    fn push_into_stack(self, sq: &Squirrel) {
-        unsafe { sq_pushuserpointer(sq.vm, self.0) };
-    }
-}
-
-pub struct Thread<'vm>(Object<'vm>);
-
-pub struct Class<'vm>(Object<'vm>);
-
-pub struct Instance<'vm>(Object<'vm>);
-
-pub struct WeakRef<'vm>(Object<'vm>);
-
-macro_rules! object_from_squirrel {
-    ($(($t:ident, $tag:ident, $name:literal)),*) => {
-        $(
-            impl<'vm> FromSquirrel<'vm> for $t<'vm> {
-                fn from_squirrel(value: Value<'vm>, _sq: &'vm Squirrel) -> Result<Self> {
-                    if let Value::$t(o) = value {
-                        Ok(o)
-                    } else {
-                        Err(Error::Type { expected: $name })
-                    }
-                }
-
-                unsafe fn from_stack(idx: Integer, sq: &'vm Squirrel) -> Result<Self> {
-                    let object = Object::from_stack(idx, sq);
-                    if object.obj._type != $tag {
-                        return Err(Error::Type { expected: $name });
-                    }
-                    Ok($t(object))
-                }
-            }
-        )*
-    };
-}
-
-object_from_squirrel!(
-    (UserData, tagSQObjectType_OT_USERDATA, "userdata"),
-    (Generator, tagSQObjectType_OT_GENERATOR, "generator"),
-    (Thread, tagSQObjectType_OT_THREAD, "thread"),
-    (Class, tagSQObjectType_OT_CLASS, "class"),
-    (Instance, tagSQObjectType_OT_INSTANCE, "instance"),
-    (WeakRef, tagSQObjectType_OT_WEAKREF, "weakref")
-);
-
-macro_rules! object_into_squirrel {
-    ($($t:ident),*) => {
-        $(
-            impl<'vm> IntoSquirrel<'vm> for $t<'vm> {
-                fn into_squirrel(self, sq: &'vm Squirrel) -> Value<'vm> {
-                    self.0.sq.assert_same_vm(sq);
-                    Value::$t(self)
-                }
-            }
-
-            unsafe impl<'vm> PushIntoStack for $t<'vm> {
-                fn push_into_stack(self, sq: &Squirrel) {
-                    self.0.sq.assert_same_vm(sq);
-                    self.0.push_into_stack();
-                }
-            }
-        )*
-    }
-}
-
-object_into_squirrel!(UserData, Generator, Thread, Class, Instance, WeakRef);

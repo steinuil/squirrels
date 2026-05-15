@@ -11,6 +11,7 @@ use crate::{
 ///
 /// It is a logic error to mix handle types between separate `Squirrel` instances,
 /// and doing so will result in a panic.
+#[derive(Clone, PartialEq)]
 pub enum Value<'vm> {
     Null,
     Integer(Integer),

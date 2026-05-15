@@ -3,14 +3,12 @@ use squirrels_sys::{
 };
 
 use crate::{
-    CallError, CallResult, Error, FromSquirrel, IntoArgs, Object, Value, get_runtime_error,
+    CallError, CallResult, FromSquirrel, IntoArgs, Object, get_runtime_error,
     traits::impl_object_traits,
 };
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Closure<'vm>(pub(crate) Object<'vm>);
-
-impl Eq for Closure<'_> {}
 
 impl_object_traits!(Closure, tagSQObjectType_OT_CLOSURE, "closure");
 
@@ -22,8 +20,6 @@ impl<'vm> Closure<'vm> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NativeClosure<'vm>(pub(crate) Object<'vm>);
-
-impl Eq for NativeClosure<'_> {}
 
 impl_object_traits!(
     NativeClosure,
