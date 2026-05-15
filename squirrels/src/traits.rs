@@ -15,14 +15,20 @@ pub trait FromSquirrel<'vm>: Sized {
     }
 }
 
+/// Trait for types that can be pushed into the Squirrel stack.
 pub unsafe trait PushIntoStack {
+    /// Pushes the value to the top of the Squirrel stack.
     fn push_into_stack(self, sq: &Squirrel);
 }
 
+/// Trait for types convertible to [`Value`].
 pub trait IntoSquirrel<'vm>: PushIntoStack + Sized {
+    /// Performs the conversion.
     fn into_squirrel(self, sq: &'vm Squirrel) -> Value<'vm>;
 }
 
+// Types that do not have a lifetime bound on `'vm` can have
+// a blanket impl of `PushIntoStack`.
 unsafe impl<T> PushIntoStack for T
 where
     T: for<'vm> IntoSquirrel<'vm>,
@@ -143,3 +149,227 @@ impl IntoSquirrel<'_> for bool {
         Value::Bool(self)
     }
 }
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+pub trait IntoArgs: sealed::Sealed {
+    fn push_args(self, sq: &Squirrel) -> Integer;
+}
+
+pub trait FromArgs<'vm>: sealed::Sealed + Sized {
+    fn from_args(count: Integer, sq: &'vm Squirrel) -> Result<Self>;
+}
+
+impl sealed::Sealed for () {}
+
+impl IntoArgs for () {
+    fn push_args(self, _sq: &Squirrel) -> Integer {
+        0
+    }
+}
+
+impl FromArgs<'_> for () {
+    fn from_args(count: Integer, _sq: &Squirrel) -> Result<Self> {
+        if count == 0 {
+            Ok(())
+        } else {
+            Err(Error::Type {
+                expected: "0 arguments",
+            })
+        }
+    }
+}
+
+impl<T> sealed::Sealed for Vec<T> {}
+
+impl<'vm, T: IntoSquirrel<'vm>> IntoArgs for Vec<T> {
+    fn push_args(self, sq: &Squirrel) -> Integer {
+        let len = self.len() as Integer;
+
+        for item in self {
+            item.push_into_stack(sq);
+        }
+
+        len
+    }
+}
+
+impl<'vm, T: FromSquirrel<'vm>> FromArgs<'vm> for Vec<T> {
+    fn from_args(count: Integer, sq: &'vm Squirrel) -> Result<Self> {
+        let mut args = Vec::new();
+
+        for i in 0..count {
+            args.push(unsafe { T::from_stack(2 + i, sq) }?);
+        }
+
+        Ok(args)
+    }
+}
+
+macro_rules! count_args {
+    ($($_:tt),+) => {
+        <[()]>::len(&[$(count_args!(@unit $_)),+])
+    };
+    (@unit $_:tt) => { () };
+}
+
+macro_rules! impl_args_tuple {
+    ( $( $field:tt = $name:ident ),+ $( , )? ) => {
+        impl< $( $name ),+ > sealed::Sealed for ( $( $name, )+ ) {}
+
+        impl<'vm, $( $name: IntoSquirrel<'vm> ),+ > IntoArgs for ( $( $name, )+ ) {
+            fn push_args(self, sq: &Squirrel) -> Integer {
+                $( self.$field.push_into_stack(sq); )+
+                count_args!( $( $name ),+ ) as Integer
+            }
+        }
+
+        impl<'vm, $( $name: FromSquirrel<'vm> ),+ > FromArgs<'vm> for ( $( $name, )+ ) {
+            fn from_args(count: Integer, sq: &'vm Squirrel) -> Result<Self> {
+                if count == (count_args!( $( $name ),+ ) as Integer) {
+                    Ok(( $( unsafe { $name::from_stack($field + 2, sq) }?, )+ ))
+                } else {
+                    return Err(Error::Type {
+                        expected: concat!(stringify!(count_args!( $($name),+ )), " arguments"),
+                    })
+                }
+            }
+        }
+    }
+}
+
+impl_args_tuple!(0 = T0);
+impl_args_tuple!(0 = T0, 1 = T1);
+impl_args_tuple!(0 = T0, 1 = T1, 2 = T2);
+impl_args_tuple!(0 = T0, 1 = T1, 2 = T2, 3 = T3);
+impl_args_tuple!(0 = T0, 1 = T1, 2 = T2, 3 = T3, 4 = T4);
+impl_args_tuple!(0 = T0, 1 = T1, 2 = T2, 3 = T3, 4 = T4, 5 = T5);
+impl_args_tuple!(0 = T0, 1 = T1, 2 = T2, 3 = T3, 4 = T4, 5 = T5, 6 = T6);
+impl_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+);
+impl_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+);
+impl_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+    9 = T9,
+);
+impl_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+    9 = T9,
+    10 = T10,
+);
+impl_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+    9 = T9,
+    10 = T10,
+    11 = T11,
+);
+impl_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+    9 = T9,
+    10 = T10,
+    11 = T11,
+    12 = T12,
+);
+impl_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+    9 = T9,
+    10 = T10,
+    11 = T11,
+    12 = T12,
+    13 = T13,
+);
+impl_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+    9 = T9,
+    10 = T10,
+    11 = T11,
+    12 = T12,
+    13 = T13,
+    14 = T14,
+);
+impl_args_tuple!(
+    0 = T0,
+    1 = T1,
+    2 = T2,
+    3 = T3,
+    4 = T4,
+    5 = T5,
+    6 = T6,
+    7 = T7,
+    8 = T8,
+    9 = T9,
+    10 = T10,
+    11 = T11,
+    12 = T12,
+    13 = T13,
+    14 = T14,
+    15 = T15,
+);

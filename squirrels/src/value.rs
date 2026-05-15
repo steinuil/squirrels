@@ -71,23 +71,6 @@ impl<'vm> IntoSquirrel<'vm> for Value<'vm> {
 
 unsafe impl<'vm> PushIntoStack for Value<'vm> {
     fn push_into_stack(self, sq: &Squirrel) {
-        match self {
-            Value::Null => ().push_into_stack(sq),
-            Value::Integer(n) => n.push_into_stack(sq),
-            Value::Float(f) => f.push_into_stack(sq),
-            Value::Bool(b) => b.push_into_stack(sq),
-            Value::String(s) => s.push_into_stack(sq),
-            Value::Table(table) => table.push_into_stack(sq),
-            Value::Array(array) => array.push_into_stack(sq),
-            Value::UserData(user_data) => user_data.push_into_stack(sq),
-            Value::Closure(closure) => closure.push_into_stack(sq),
-            Value::NativeClosure(native_closure) => native_closure.push_into_stack(sq),
-            Value::Generator(generator) => generator.push_into_stack(sq),
-            Value::UserPointer(user_pointer) => user_pointer.push_into_stack(sq),
-            Value::Thread(thread) => thread.push_into_stack(sq),
-            Value::Class(class) => class.push_into_stack(sq),
-            Value::Instance(instance) => instance.push_into_stack(sq),
-            Value::WeakRef(weak_ref) => weak_ref.push_into_stack(sq),
-        }
+        sq.push_value(&self);
     }
 }
