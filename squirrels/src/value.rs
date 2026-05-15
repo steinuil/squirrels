@@ -1,6 +1,7 @@
 use crate::{
-    Array, Class, Closure, Float, FromSquirrel, Generator, Instance, Integer, NativeClosure,
-    Object, Result, Squirrel, String, Table, Thread, UserData, UserPointer, WeakRef,
+    Array, Class, Closure, Float, FromSquirrel, Generator, Instance, Integer, IntoSquirrel,
+    NativeClosure, Object, PushIntoStack, Result, Squirrel, String, Table, Thread, UserData,
+    UserPointer, WeakRef,
 };
 
 /// A dynamically typed Squirrel value.
@@ -59,5 +60,34 @@ impl<'vm> FromSquirrel<'vm> for Value<'vm> {
 
     unsafe fn from_stack(idx: Integer, sq: &'vm Squirrel) -> Result<Self> {
         Ok(Object::from_stack(idx, sq).into_value())
+    }
+}
+
+impl<'vm> IntoSquirrel<'vm> for Value<'vm> {
+    fn into_squirrel(self, _sq: &'vm Squirrel) -> Value<'vm> {
+        self
+    }
+}
+
+unsafe impl<'vm> PushIntoStack for Value<'vm> {
+    fn push_into_stack(self, sq: &Squirrel) {
+        match self {
+            Value::Null => ().push_into_stack(sq),
+            Value::Integer(n) => n.push_into_stack(sq),
+            Value::Float(f) => f.push_into_stack(sq),
+            Value::Bool(b) => b.push_into_stack(sq),
+            Value::String(s) => s.push_into_stack(sq),
+            Value::Table(table) => table.push_into_stack(sq),
+            Value::Array(array) => array.push_into_stack(sq),
+            Value::UserData(user_data) => user_data.push_into_stack(sq),
+            Value::Closure(closure) => closure.push_into_stack(sq),
+            Value::NativeClosure(native_closure) => native_closure.push_into_stack(sq),
+            Value::Generator(generator) => generator.push_into_stack(sq),
+            Value::UserPointer(user_pointer) => user_pointer.push_into_stack(sq),
+            Value::Thread(thread) => thread.push_into_stack(sq),
+            Value::Class(class) => class.push_into_stack(sq),
+            Value::Instance(instance) => instance.push_into_stack(sq),
+            Value::WeakRef(weak_ref) => weak_ref.push_into_stack(sq),
+        }
     }
 }

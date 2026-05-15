@@ -16,8 +16,8 @@ use squirrels_sys::{
     SQFloat, SQInteger, SQTrue, SQUnsignedInteger, SQUserPointer, sq_addref, sq_call, sq_close,
     sq_compilebuffer, sq_getlasterror, sq_getstackobj, sq_gettop, sq_getuserdata, sq_getvmstate,
     sq_newclosure, sq_newuserdata, sq_open, sq_pop, sq_push, sq_pushbool, sq_pushfloat,
-    sq_pushinteger, sq_pushnull, sq_pushobject, sq_pushroottable, sq_release, sq_resetobject,
-    sq_setreleasehook, sq_throwerror, sq_throwobject, tagSQObjectType_OT_CLASS,
+    sq_pushinteger, sq_pushnull, sq_pushobject, sq_pushroottable, sq_pushuserpointer, sq_release,
+    sq_resetobject, sq_setreleasehook, sq_throwerror, sq_throwobject, tagSQObjectType_OT_CLASS,
     tagSQObjectType_OT_CLOSURE, tagSQObjectType_OT_GENERATOR, tagSQObjectType_OT_INSTANCE,
     tagSQObjectType_OT_NATIVECLOSURE, tagSQObjectType_OT_THREAD, tagSQObjectType_OT_USERDATA,
     tagSQObjectType_OT_WEAKREF,
@@ -26,10 +26,11 @@ use squirrels_sys::{
 pub use crate::array::Array;
 pub use crate::string::String;
 pub use crate::table::Table;
-pub use crate::traits::FromSquirrel;
+pub use crate::traits::{FromSquirrel, IntoSquirrel};
 pub use crate::value::Value;
 
 pub(crate) use crate::object::{Object, ObjectType};
+pub(crate) use crate::traits::PushIntoStack;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -165,7 +166,7 @@ extern "C" fn closure_trampoline<'vm, F, A, R>(v: HSQUIRRELVM) -> SQInteger
 where
     F: Fn(A) -> std::result::Result<R, Value<'vm>> + Send + Sync + 'static,
     A: for<'a> FromArgs<'a>,
-    R: IntoSquirrel,
+    R: IntoSquirrel<'vm>,
 {
     let result = catch_unwind(AssertUnwindSafe(|| {
         let top = unsafe { sq_gettop(v) };
@@ -192,11 +193,11 @@ where
 
         match f(args) {
             Ok(r) => {
-                r.push_to(sq);
+                r.push_into_stack(sq);
                 1
             }
             Err(value) => {
-                value.push_to(sq);
+                value.push_into_stack(sq);
                 unsafe { sq_throwobject(v) }.0
             }
         }
@@ -308,6 +309,11 @@ impl Squirrel {
         assert!(valid, "invalid stack index {idx} (top={top})")
     }
 
+    pub(crate) fn assert_same_vm(&self, other: &Self) {
+        let equal = std::ptr::eq(self.vm, other.vm);
+        assert!(equal, "attempted to use a value from another VM")
+    }
+
     // NOTE: closures created by this function do not allow Squirrel objects to be
     // `move`d inside them because that implies `Object` can be `Send` and, in turn,
     // `Squirrel` to be `Sync`, because dropping a reference to an object has to
@@ -319,7 +325,7 @@ impl Squirrel {
     where
         F: Fn(A) -> std::result::Result<R, Value<'vm>> + Send + Sync + 'static,
         A: for<'a> FromArgs<'a>,
-        R: IntoSquirrel,
+        R: IntoSquirrel<'vm>,
     {
         let fn_ptr: *mut F = Box::into_raw(Box::new(f));
 
@@ -334,6 +340,27 @@ impl Squirrel {
         let nc = NativeClosure(Object::from_stack(-1, self));
         self.pop(1);
         nc
+    }
+
+    pub fn push_value(&self, value: &Value<'_>) {
+        match value {
+            Value::Null => unsafe { sq_pushnull(self.vm) },
+            Value::Integer(n) => unsafe { sq_pushinteger(self.vm, *n) },
+            Value::Float(n) => unsafe { sq_pushfloat(self.vm, *n) },
+            Value::Bool(b) => unsafe { sq_pushbool(self.vm, if *b { 1 } else { 0 }) },
+            Value::UserPointer(p) => unsafe { sq_pushuserpointer(self.vm, p.0) },
+            Value::String(String { obj, .. })
+            | Value::Table(Table(obj))
+            | Value::Array(Array(obj))
+            | Value::UserData(UserData(obj))
+            | Value::Closure(Closure(obj))
+            | Value::NativeClosure(NativeClosure(obj))
+            | Value::Generator(Generator(obj))
+            | Value::Thread(Thread(obj))
+            | Value::Class(Class(obj))
+            | Value::Instance(Instance(obj))
+            | Value::WeakRef(WeakRef(obj)) => obj.push_into_stack(),
+        }
     }
 }
 
@@ -423,7 +450,7 @@ pub struct Closure<'vm>(Object<'vm>);
 
 impl<'vm> Closure<'vm> {
     pub fn call<A: IntoArgs, T: FromSquirrel<'vm>>(&self, args: A) -> CallResult<'vm, T> {
-        self.push_to(self.0.sq);
+        self.0.push_into_stack();
         self.0.sq.push_root_table();
         let arg_count = args.push_args(self.0.sq) + 1;
 
@@ -503,7 +530,7 @@ pub struct NativeClosure<'vm>(Object<'vm>);
 
 impl<'vm> NativeClosure<'vm> {
     pub fn call<A: IntoArgs, T: FromSquirrel<'vm>>(&self, args: A) -> CallResult<'vm, T> {
-        self.push_to(self.0.sq);
+        self.0.push_into_stack();
         self.0.sq.push_root_table();
         let arg_count = args.push_args(self.0.sq) + 1;
 
@@ -523,6 +550,12 @@ impl<'vm> NativeClosure<'vm> {
 pub struct Generator<'vm>(Object<'vm>);
 
 pub struct UserPointer(*mut c_void);
+
+unsafe impl PushIntoStack for UserPointer {
+    fn push_into_stack(self, sq: &Squirrel) {
+        unsafe { sq_pushuserpointer(sq.vm, self.0) };
+    }
+}
 
 pub struct Thread<'vm>(Object<'vm>);
 
@@ -571,69 +604,18 @@ object_from_squirrel!(
     (WeakRef, tagSQObjectType_OT_WEAKREF, "weakref")
 );
 
-pub trait IntoSquirrel {
-    fn push_to(&self, sq: &Squirrel);
-}
-
-impl IntoSquirrel for () {
-    fn push_to(&self, sq: &Squirrel) {
-        unsafe { sq_pushnull(sq.vm) };
-    }
-}
-
-impl IntoSquirrel for Integer {
-    fn push_to(&self, sq: &Squirrel) {
-        unsafe { sq_pushinteger(sq.vm, *self) };
-    }
-}
-
-impl IntoSquirrel for Float {
-    fn push_to(&self, sq: &Squirrel) {
-        unsafe { sq_pushfloat(sq.vm, *self) };
-    }
-}
-
-impl IntoSquirrel for bool {
-    fn push_to(&self, sq: &Squirrel) {
-        unsafe { sq_pushbool(sq.vm, if *self { 1 } else { 0 }) };
-    }
-}
-
-impl IntoSquirrel for String<'_> {
-    fn push_to(&self, sq: &Squirrel) {
-        assert!(
-            std::ptr::eq(self.obj.sq as *const _, sq.vm as *const _),
-            "pushing object to a different VM"
-        );
-        self.obj.push();
-    }
-}
-
-impl IntoSquirrel for &str {
-    fn push_to(&self, sq: &Squirrel) {
-        // NOTE Kind of wasteful; we're pushing the string on the stack, popping it,
-        // and then pushing it again.
-        let s = String::from_str(sq, self);
-        s.obj.push()
-    }
-}
-
-impl IntoSquirrel for std::string::String {
-    fn push_to(&self, sq: &Squirrel) {
-        self.as_str().push_to(sq);
-    }
-}
-
 macro_rules! object_into_squirrel {
     ($($t:ident),*) => {
         $(
-            impl IntoSquirrel for $t<'_> {
-                fn push_to(&self, sq: &Squirrel) {
-                    assert!(
-                        std::ptr::eq(self.0.sq.vm as *const _, sq.vm as *const _),
-                        "pushing object to a different VM"
-                    );
-                    self.0.push();
+            impl<'vm> IntoSquirrel<'vm> for $t<'vm> {
+                fn into_squirrel(self, _sq: &'vm Squirrel) -> Value<'vm> {
+                    Value::$t(self)
+                }
+            }
+
+            unsafe impl<'vm> PushIntoStack for $t<'vm> {
+                fn push_into_stack(self, _sq: &Squirrel) {
+                    self.0.push_into_stack();
                 }
             }
         )*
@@ -641,8 +623,6 @@ macro_rules! object_into_squirrel {
 }
 
 object_into_squirrel!(
-    Table,
-    Array,
     UserData,
     Closure,
     NativeClosure,
@@ -652,29 +632,6 @@ object_into_squirrel!(
     Instance,
     WeakRef
 );
-
-impl IntoSquirrel for Value<'_> {
-    fn push_to(&self, sq: &Squirrel) {
-        match self {
-            Value::Null => <() as IntoSquirrel>::push_to(&(), sq),
-            Value::Integer(n) => n.push_to(sq),
-            Value::Float(n) => n.push_to(sq),
-            Value::Bool(b) => b.push_to(sq),
-            Value::String(sq_string) => sq_string.push_to(sq),
-            Value::Table(table) => table.push_to(sq),
-            Value::Array(array) => array.push_to(sq),
-            Value::UserData(user_data) => user_data.push_to(sq),
-            Value::Closure(closure) => closure.push_to(sq),
-            Value::NativeClosure(native_closure) => native_closure.push_to(sq),
-            Value::Generator(generator) => generator.push_to(sq),
-            Value::UserPointer(_) => todo!(),
-            Value::Thread(thread) => thread.push_to(sq),
-            Value::Class(class) => class.push_to(sq),
-            Value::Instance(instance) => instance.push_to(sq),
-            Value::WeakRef(weak_ref) => weak_ref.push_to(sq),
-        }
-    }
-}
 
 pub trait IntoArgs {
     fn push_args(self, sq: &Squirrel) -> SQInteger;
@@ -710,9 +667,9 @@ macro_rules! count_args {
 
 macro_rules! impl_into_args_tuple {
     ($($field:tt = $name:ident),+ $(,)?) => {
-        impl<$($name: IntoSquirrel),+> IntoArgs for ($($name,)+) {
+        impl<'vm, $($name: IntoSquirrel<'vm>),+> IntoArgs for ($($name,)+) {
             fn push_args(self, sq: &Squirrel) -> SQInteger {
-                $( self.$field.push_to(sq); )+
+                $( self.$field.push_into_stack(sq); )+
                 count_args!($($name),+) as SQInteger
             }
         }

@@ -41,7 +41,7 @@ impl<'vm> Object<'vm> {
     }
 
     /// Pushes the object to the top of the stack.
-    pub(crate) fn push(&self) {
+    pub(crate) fn push_into_stack(&self) {
         unsafe { sq_pushobject(self.sq.vm, self.obj) };
     }
 

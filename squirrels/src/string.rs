@@ -1,6 +1,9 @@
 use squirrels_sys::{SQChar, sq_getstringandsize, sq_pushstring, tagSQObjectType_OT_STRING};
 
-use crate::{Error, FromSquirrel, Integer, Object, ObjectType, Result, Squirrel, Value};
+use crate::{
+    Error, FromSquirrel, Integer, IntoSquirrel, Object, ObjectType, PushIntoStack, Result,
+    Squirrel, Value,
+};
 
 pub struct String<'vm> {
     pub(crate) obj: Object<'vm>,
@@ -16,7 +19,7 @@ impl<'vm> String<'vm> {
 
         // First we must push the string onto the stack because we can't get its stack index
         // from its object handle, if it has any.
-        object.push();
+        object.push_into_stack();
 
         let mut ptr: *const SQChar = std::ptr::null();
         let mut len: Integer = 0;
@@ -50,7 +53,11 @@ impl<'vm> String<'vm> {
     }
 
     pub fn from_str(sq: &'vm Squirrel, str: &str) -> Self {
-        unsafe { sq_pushstring(sq.vm, str.as_bytes().as_ptr() as *const i8, str.len() as _) };
+        Self::from_bytes(sq, str.as_bytes())
+    }
+
+    pub fn from_bytes(sq: &'vm Squirrel, bytes: &[u8]) -> Self {
+        unsafe { sq_pushstring(sq.vm, bytes.as_ptr() as *const i8, bytes.len() as _) };
         let obj =
             unsafe { String::from_stack(-1, sq) }.expect("expecting the string we just pushed");
         sq.pop(1);
@@ -152,6 +159,38 @@ impl<'vm> FromSquirrel<'vm> for String<'vm> {
             ptr,
             len: len as usize,
         })
+    }
+}
+
+impl<'vm> IntoSquirrel<'vm> for String<'vm> {
+    fn into_squirrel(self, _sq: &'vm Squirrel) -> Value<'vm> {
+        // TODO add check that this is the same Squirrel VM
+        Value::String(self)
+    }
+}
+
+impl IntoSquirrel<'_> for &str {
+    fn into_squirrel(self, sq: &'_ Squirrel) -> Value<'_> {
+        Value::String(String::from_str(sq, self))
+    }
+}
+
+impl IntoSquirrel<'_> for std::string::String {
+    fn into_squirrel(self, sq: &'_ Squirrel) -> Value<'_> {
+        Value::String(String::from_str(sq, self.as_str()))
+    }
+}
+
+impl IntoSquirrel<'_> for &[u8] {
+    fn into_squirrel(self, sq: &'_ Squirrel) -> Value<'_> {
+        Value::String(String::from_bytes(sq, self))
+    }
+}
+
+unsafe impl<'vm> PushIntoStack for String<'vm> {
+    fn push_into_stack(self, _sq: &Squirrel) {
+        // TODO add check that this is the same Squirrel VM
+        self.obj.push_into_stack();
     }
 }
 

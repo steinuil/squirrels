@@ -15,6 +15,24 @@ pub trait FromSquirrel<'vm>: Sized {
     }
 }
 
+pub unsafe trait PushIntoStack {
+    fn push_into_stack(self, sq: &Squirrel);
+}
+
+pub trait IntoSquirrel<'vm>: PushIntoStack + Sized {
+    fn into_squirrel(self, sq: &'vm Squirrel) -> Value<'vm>;
+}
+
+unsafe impl<T> PushIntoStack for T
+where
+    T: for<'vm> IntoSquirrel<'vm>,
+{
+    fn push_into_stack(self, sq: &Squirrel) {
+        let v = self.into_squirrel(sq);
+        sq.push_value(&v);
+    }
+}
+
 impl FromSquirrel<'_> for () {
     fn from_squirrel(value: Value<'_>, _sq: &'_ Squirrel) -> Result<Self> {
         if let Value::Null = value {
@@ -32,6 +50,12 @@ impl FromSquirrel<'_> for () {
         } else {
             Err(Error::Type { expected: "null" })
         }
+    }
+}
+
+impl IntoSquirrel<'_> for () {
+    fn into_squirrel(self, _sq: &'_ Squirrel) -> Value<'_> {
+        Value::Null
     }
 }
 
@@ -60,6 +84,12 @@ impl FromSquirrel<'_> for Integer {
     }
 }
 
+impl IntoSquirrel<'_> for Integer {
+    fn into_squirrel(self, _sq: &'_ Squirrel) -> Value<'_> {
+        Value::Integer(self)
+    }
+}
+
 impl FromSquirrel<'_> for Float {
     fn from_squirrel(value: Value<'_>, _sq: &'_ Squirrel) -> Result<Self> {
         if let Value::Float(n) = value {
@@ -81,6 +111,12 @@ impl FromSquirrel<'_> for Float {
     }
 }
 
+impl IntoSquirrel<'_> for Float {
+    fn into_squirrel(self, _sq: &'_ Squirrel) -> Value<'_> {
+        Value::Float(self)
+    }
+}
+
 impl FromSquirrel<'_> for bool {
     fn from_squirrel(value: Value<'_>, _sq: &'_ Squirrel) -> Result<Self> {
         if let Value::Bool(b) = value {
@@ -99,5 +135,11 @@ impl FromSquirrel<'_> for bool {
         } else {
             Ok(b != 0)
         }
+    }
+}
+
+impl IntoSquirrel<'_> for bool {
+    fn into_squirrel(self, _sq: &'_ Squirrel) -> Value<'_> {
+        Value::Bool(self)
     }
 }
