@@ -1,7 +1,11 @@
-use squirrels_sys::{SQFalse, sq_get, sq_newslot};
+use squirrels_sys::{SQFalse, sq_get, sq_newslot, tagSQObjectType_OT_TABLE};
 
-use crate::{CallError, CallResult, FromSquirrel, IntoSquirrel, Object, Result, get_runtime_error};
+use crate::{
+    CallError, CallResult, Error, FromSquirrel, IntoSquirrel, Object, Result, Value,
+    get_runtime_error,
+};
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct Table<'vm>(pub(crate) Object<'vm>);
 
 impl<'vm> Table<'vm> {
@@ -19,7 +23,7 @@ impl<'vm> Table<'vm> {
             return Ok(None);
         }
 
-        let val = V::from_stack(self.0.sq, -1);
+        let val = unsafe { V::from_stack(-1, self.0.sq) };
         self.0.sq.pop(2);
         val.map(Some)
     }
@@ -45,6 +49,28 @@ impl<'vm> Table<'vm> {
         self.0.sq.pop(1);
 
         Ok(())
+    }
+}
+
+impl Eq for Table<'_> {}
+
+impl<'vm> FromSquirrel<'vm> for Table<'vm> {
+    fn from_squirrel(value: crate::Value<'vm>, _sq: &'vm crate::Squirrel) -> Result<Self> {
+        if let Value::Table(t) = value {
+            Ok(t)
+        } else {
+            Err(Error::Type { expected: "table" })
+        }
+    }
+
+    unsafe fn from_stack(idx: crate::Integer, sq: &'vm crate::Squirrel) -> Result<Self> {
+        let object = Object::from_stack(idx, sq);
+
+        if object.obj._type == tagSQObjectType_OT_TABLE {
+            Ok(Table(object))
+        } else {
+            Err(Error::Type { expected: "table" })
+        }
     }
 }
 

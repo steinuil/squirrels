@@ -1,6 +1,6 @@
-use squirrels_sys::{SQChar, sq_getstringandsize, sq_pushstring};
+use squirrels_sys::{SQChar, sq_getstringandsize, sq_pushstring, tagSQObjectType_OT_STRING};
 
-use crate::{Error, Integer, Object, ObjectType, Result, Squirrel};
+use crate::{Error, FromSquirrel, Integer, Object, ObjectType, Result, Squirrel, Value};
 
 pub struct String<'vm> {
     pub(crate) obj: Object<'vm>,
@@ -37,27 +37,6 @@ impl<'vm> String<'vm> {
         })
     }
 
-    pub(crate) fn from_stack(sq: &'vm Squirrel, idx: Integer) -> Result<Self> {
-        let object = Object::from_stack(sq, idx);
-        if object.kind() != ObjectType::String {
-            return Err(Error::Type { expected: "string" });
-        }
-
-        let mut ptr: *const SQChar = std::ptr::null();
-        let mut len: Integer = 0;
-        let ret = unsafe { sq_getstringandsize(sq.vm, idx, &mut ptr, &mut len) };
-        assert!(
-            !ret.is_error(),
-            "sq_getstringandsize failed on a verified OT_STRING"
-        );
-
-        Ok(Self {
-            obj: object,
-            ptr,
-            len: len as usize,
-        })
-    }
-
     pub fn as_bytes(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.ptr as *const u8, self.len) }
     }
@@ -72,7 +51,8 @@ impl<'vm> String<'vm> {
 
     pub fn from_str(sq: &'vm Squirrel, str: &str) -> Self {
         unsafe { sq_pushstring(sq.vm, str.as_bytes().as_ptr() as *const i8, str.len() as _) };
-        let obj = String::from_stack(sq, -1).expect("expecting the string we just pushed");
+        let obj =
+            unsafe { String::from_stack(-1, sq) }.expect("expecting the string we just pushed");
         sq.pop(1);
         obj
     }
@@ -141,6 +121,37 @@ impl std::fmt::Debug for String<'_> {
 
         write!(f, "b")?;
         <bstr::BStr as std::fmt::Debug>::fmt(bstr::BStr::new(&bytes), f)
+    }
+}
+
+impl<'vm> FromSquirrel<'vm> for String<'vm> {
+    fn from_squirrel(value: crate::Value<'vm>, _sq: &'vm Squirrel) -> Result<Self> {
+        if let Value::String(s) = value {
+            Ok(s)
+        } else {
+            Err(Error::Type { expected: "string" })
+        }
+    }
+
+    unsafe fn from_stack(idx: Integer, sq: &'vm Squirrel) -> Result<Self> {
+        let object = Object::from_stack(idx, sq);
+        if object.obj._type != tagSQObjectType_OT_STRING {
+            return Err(Error::Type { expected: "string" });
+        }
+
+        let mut ptr: *const SQChar = std::ptr::null();
+        let mut len: Integer = 0;
+        let ret = unsafe { sq_getstringandsize(sq.vm, idx, &mut ptr, &mut len) };
+        assert!(
+            !ret.is_error(),
+            "sq_getstringandsize failed on a verified OT_STRING"
+        );
+
+        Ok(Self {
+            obj: object,
+            ptr,
+            len: len as usize,
+        })
     }
 }
 

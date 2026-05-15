@@ -25,6 +25,8 @@
             clippy
             lldb
             rustfmt
+
+            ast-grep
           ];
 
           LIBCLANG_PATH = pkgs.lib.makeLibraryPath [ pkgs.llvmPackages.libclang ];

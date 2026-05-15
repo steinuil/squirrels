@@ -1,6 +1,6 @@
 use crate::{
-    Array, Class, Closure, Float, Generator, Instance, Integer, NativeClosure, String, Table,
-    Thread, UserData, UserPointer, WeakRef,
+    Array, Class, Closure, Float, FromSquirrel, Generator, Instance, Integer, NativeClosure,
+    Object, Result, Squirrel, String, Table, Thread, UserData, UserPointer, WeakRef,
 };
 
 /// A dynamically typed Squirrel value.
@@ -49,5 +49,15 @@ impl std::fmt::Debug for Value<'_> {
             Self::Instance(o) => write!(f, "Instance({:?})", o.0),
             Self::WeakRef(o) => write!(f, "WeakRef({:?})", o.0),
         }
+    }
+}
+
+impl<'vm> FromSquirrel<'vm> for Value<'vm> {
+    fn from_squirrel(value: Value<'vm>, _sq: &'vm Squirrel) -> Result<Self> {
+        Ok(value)
+    }
+
+    unsafe fn from_stack(idx: Integer, sq: &'vm Squirrel) -> Result<Self> {
+        Ok(Object::from_stack(idx, sq).into_value())
     }
 }

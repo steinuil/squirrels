@@ -23,7 +23,7 @@ pub struct Object<'vm> {
 
 impl<'vm> Object<'vm> {
     /// Gets an object from stack index `idx`.
-    pub(crate) fn from_stack(sq: &'vm Squirrel, idx: Integer) -> Self {
+    pub(crate) fn from_stack(idx: Integer, sq: &'vm Squirrel) -> Self {
         sq.assert_valid_idx(idx);
 
         // Initialize the object

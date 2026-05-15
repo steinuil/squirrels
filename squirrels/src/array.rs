@@ -1,6 +1,6 @@
-use squirrels_sys::sq_get;
+use squirrels_sys::{sq_get, tagSQObjectType_OT_ARRAY};
 
-use crate::{FromSquirrel, Integer, IntoSquirrel, Object, Result};
+use crate::{Error, FromSquirrel, Integer, IntoSquirrel, Object, Result, Value};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Array<'vm>(pub(crate) Object<'vm>);
@@ -17,10 +17,30 @@ impl<'vm> Array<'vm> {
             return Ok(None);
         }
 
-        let val = V::from_stack(self.0.sq, -1);
+        let val = unsafe { V::from_stack(-1, self.0.sq) };
         self.0.sq.pop(2);
         val.map(Some)
     }
 }
 
 impl Eq for Array<'_> {}
+
+impl<'vm> FromSquirrel<'vm> for Array<'vm> {
+    fn from_squirrel(value: Value<'vm>, _sq: &'vm crate::Squirrel) -> Result<Self> {
+        if let Value::Array(a) = value {
+            Ok(a)
+        } else {
+            Err(Error::Type { expected: "array" })
+        }
+    }
+
+    unsafe fn from_stack(idx: Integer, sq: &'vm crate::Squirrel) -> Result<Self> {
+        let object = Object::from_stack(idx, sq);
+
+        if object.obj._type == tagSQObjectType_OT_ARRAY {
+            Ok(Array(object))
+        } else {
+            Err(Error::Type { expected: "array" })
+        }
+    }
+}

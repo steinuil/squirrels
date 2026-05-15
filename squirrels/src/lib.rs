@@ -3,6 +3,7 @@ mod compiler_error_handler;
 mod object;
 mod string;
 mod table;
+mod traits;
 mod value;
 
 use std::{
@@ -11,21 +12,21 @@ use std::{
 };
 
 use squirrels_sys::{
-    HSQOBJECT, HSQUIRRELVM, SQ_VMSTATE_IDLE, SQ_VMSTATE_RUNNING, SQ_VMSTATE_SUSPENDED, SQBool,
-    SQFalse, SQFloat, SQInteger, SQTrue, SQUnsignedInteger, SQUserPointer, sq_addref, sq_call,
-    sq_close, sq_compilebuffer, sq_getbool, sq_getfloat, sq_getinteger, sq_getlasterror,
-    sq_getstackobj, sq_gettop, sq_getuserdata, sq_getvmstate, sq_newclosure, sq_newuserdata,
-    sq_open, sq_pop, sq_push, sq_pushbool, sq_pushfloat, sq_pushinteger, sq_pushnull,
-    sq_pushobject, sq_pushroottable, sq_release, sq_resetobject, sq_setreleasehook, sq_throwerror,
-    sq_throwobject, tagSQObjectType_OT_ARRAY, tagSQObjectType_OT_CLASS, tagSQObjectType_OT_CLOSURE,
-    tagSQObjectType_OT_GENERATOR, tagSQObjectType_OT_INSTANCE, tagSQObjectType_OT_NATIVECLOSURE,
-    tagSQObjectType_OT_NULL, tagSQObjectType_OT_TABLE, tagSQObjectType_OT_THREAD,
-    tagSQObjectType_OT_USERDATA, tagSQObjectType_OT_WEAKREF,
+    HSQOBJECT, HSQUIRRELVM, SQ_VMSTATE_IDLE, SQ_VMSTATE_RUNNING, SQ_VMSTATE_SUSPENDED, SQFalse,
+    SQFloat, SQInteger, SQTrue, SQUnsignedInteger, SQUserPointer, sq_addref, sq_call, sq_close,
+    sq_compilebuffer, sq_getlasterror, sq_getstackobj, sq_gettop, sq_getuserdata, sq_getvmstate,
+    sq_newclosure, sq_newuserdata, sq_open, sq_pop, sq_push, sq_pushbool, sq_pushfloat,
+    sq_pushinteger, sq_pushnull, sq_pushobject, sq_pushroottable, sq_release, sq_resetobject,
+    sq_setreleasehook, sq_throwerror, sq_throwobject, tagSQObjectType_OT_CLASS,
+    tagSQObjectType_OT_CLOSURE, tagSQObjectType_OT_GENERATOR, tagSQObjectType_OT_INSTANCE,
+    tagSQObjectType_OT_NATIVECLOSURE, tagSQObjectType_OT_THREAD, tagSQObjectType_OT_USERDATA,
+    tagSQObjectType_OT_WEAKREF,
 };
 
 pub use crate::array::Array;
 pub use crate::string::String;
 pub use crate::table::Table;
+pub use crate::traits::FromSquirrel;
 pub use crate::value::Value;
 
 pub(crate) use crate::object::{Object, ObjectType};
@@ -147,7 +148,7 @@ impl Drop for Squirrel {
 
 pub(crate) fn get_runtime_error(sq: &Squirrel) -> Value<'_> {
     unsafe { sq_getlasterror(sq.vm) };
-    let err = Object::from_stack(sq, -1);
+    let err = Object::from_stack(-1, sq);
     sq.pop(1);
     err.into_value()
 }
@@ -273,7 +274,7 @@ impl Squirrel {
             return Err(CallError::Runtime(get_runtime_error(self)));
         }
 
-        let val = T::from_stack(self, -1);
+        let val = unsafe { T::from_stack(-1, self) };
         self.pop(3);
         Ok(val?)
     }
@@ -330,7 +331,7 @@ impl Squirrel {
 
         unsafe { sq_newclosure(self.vm, Some(closure_trampoline::<'vm, F, A, R>), 1) };
 
-        let nc = NativeClosure(Object::from_stack(self, -1));
+        let nc = NativeClosure(Object::from_stack(-1, self));
         self.pop(1);
         nc
     }
@@ -416,12 +417,6 @@ fn native_function_error() {
     assert!(matches!(err, CallError::Runtime(Value::Integer(123))));
 }
 
-fn assert_valid_stack_idx(vm: HSQUIRRELVM, idx: SQInteger) {
-    let top = unsafe { sq_gettop(vm) };
-    let valid = idx != 0 && if idx > 0 { idx <= top } else { idx >= -top };
-    assert!(valid, "invalid stack index {idx} (top={top})")
-}
-
 pub struct UserData<'vm>(Object<'vm>);
 
 pub struct Closure<'vm>(Object<'vm>);
@@ -439,7 +434,7 @@ impl<'vm> Closure<'vm> {
             return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
         }
 
-        let val = T::from_stack(self.0.sq, -1);
+        let val = unsafe { T::from_stack(-1, self.0.sq) };
         self.0.sq.pop(2);
         Ok(val?)
     }
@@ -519,7 +514,7 @@ impl<'vm> NativeClosure<'vm> {
             return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
         }
 
-        let val = T::from_stack(self.0.sq, -1);
+        let val = unsafe { T::from_stack(-1, self.0.sq) };
         self.0.sq.pop(2);
         Ok(val?)
     }
@@ -537,73 +532,20 @@ pub struct Instance<'vm>(Object<'vm>);
 
 pub struct WeakRef<'vm>(Object<'vm>);
 
-// TODO should this trait be public?
-// If we call `from_top` on an empty stack we panic.
-pub trait FromSquirrel<'vm>: Sized {
-    fn from_stack(sq: &'vm Squirrel, idx: Integer) -> Result<Self>;
-}
-
-impl FromSquirrel<'_> for () {
-    fn from_stack(sq: &'_ Squirrel, idx: Integer) -> Result<Self> {
-        let obj = Object::from_stack(sq, idx);
-        if obj.obj._type == tagSQObjectType_OT_NULL {
-            Ok(())
-        } else {
-            Err(Error::Type { expected: "null" })
-        }
-    }
-}
-
-impl FromSquirrel<'_> for bool {
-    fn from_stack(sq: &Squirrel, idx: Integer) -> Result<Self> {
-        assert_valid_stack_idx(sq.vm, idx);
-
-        let mut out: SQBool = 0;
-        if unsafe { sq_getbool(sq.vm, idx, &mut out) }.is_error() {
-            return Err(Error::Type { expected: "bool" });
-        }
-        Ok(out != 0)
-    }
-}
-
-impl FromSquirrel<'_> for Integer {
-    fn from_stack(sq: &Squirrel, idx: Integer) -> Result<Self> {
-        assert_valid_stack_idx(sq.vm, idx);
-
-        let mut out: SQInteger = 0;
-        if unsafe { sq_getinteger(sq.vm, idx, &mut out) }.is_error() {
-            return Err(Error::Type {
-                expected: "integer",
-            });
-        }
-        Ok(out)
-    }
-}
-
-impl FromSquirrel<'_> for Float {
-    fn from_stack(sq: &Squirrel, idx: Integer) -> Result<Self> {
-        assert_valid_stack_idx(sq.vm, idx);
-
-        let mut out: SQFloat = 0.0;
-        if unsafe { sq_getfloat(sq.vm, idx, &mut out) }.is_error() {
-            return Err(Error::Type { expected: "float" });
-        }
-        Ok(out)
-    }
-}
-
-impl<'vm> FromSquirrel<'vm> for String<'vm> {
-    fn from_stack(sq: &'vm Squirrel, idx: Integer) -> Result<Self> {
-        String::from_stack(sq, idx)
-    }
-}
-
 macro_rules! object_from_squirrel {
     ($(($t:ident, $tag:ident, $name:literal)),*) => {
         $(
             impl<'vm> FromSquirrel<'vm> for $t<'vm> {
-                fn from_stack(sq: &'vm Squirrel, idx: Integer) -> Result<Self> {
-                    let object = Object::from_stack(sq, idx);
+                fn from_squirrel(value: Value<'vm>, _sq: &'vm Squirrel) -> Result<Self> {
+                    if let Value::$t(o) = value {
+                        Ok(o)
+                    } else {
+                        Err(Error::Type { expected: $name })
+                    }
+                }
+
+                unsafe fn from_stack(idx: Integer, sq: &'vm Squirrel) -> Result<Self> {
+                    let object = Object::from_stack(idx, sq);
                     if object.obj._type != $tag {
                         return Err(Error::Type { expected: $name });
                     }
@@ -615,8 +557,6 @@ macro_rules! object_from_squirrel {
 }
 
 object_from_squirrel!(
-    (Table, tagSQObjectType_OT_TABLE, "table"),
-    (Array, tagSQObjectType_OT_ARRAY, "array"),
     (UserData, tagSQObjectType_OT_USERDATA, "userdata"),
     (Closure, tagSQObjectType_OT_CLOSURE, "closure"),
     (
@@ -630,12 +570,6 @@ object_from_squirrel!(
     (Instance, tagSQObjectType_OT_INSTANCE, "instance"),
     (WeakRef, tagSQObjectType_OT_WEAKREF, "weakref")
 );
-
-impl<'vm> FromSquirrel<'vm> for Value<'vm> {
-    fn from_stack(sq: &'vm Squirrel, idx: Integer) -> Result<Self> {
-        Ok(Object::from_stack(sq, idx).into_value())
-    }
-}
 
 pub trait IntoSquirrel {
     fn push_to(&self, sq: &Squirrel);
@@ -795,7 +729,7 @@ macro_rules! impl_from_args_tuple {
                     })
                 }
 
-                Ok(( $($name::from_stack(sq, $field + 2)?,)+ ))
+                Ok(( $(unsafe { $name::from_stack($field + 2, sq) }?,)+ ))
             }
         }
     }
