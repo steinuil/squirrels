@@ -41,7 +41,7 @@ impl<'vm> String<'vm> {
     }
 
     pub fn as_bytes(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.ptr as *const u8, self.len) }
+        unsafe { std::slice::from_raw_parts(self.ptr as *const _, self.len) }
     }
 
     pub fn to_str(&self) -> std::result::Result<&str, std::str::Utf8Error> {
@@ -57,7 +57,7 @@ impl<'vm> String<'vm> {
     }
 
     pub fn from_bytes(sq: &'vm Squirrel, bytes: &[u8]) -> Self {
-        unsafe { sq_pushstring(sq.vm, bytes.as_ptr() as *const i8, bytes.len() as _) };
+        unsafe { sq_pushstring(sq.vm, bytes.as_ptr() as *const _, bytes.len() as _) };
         let obj =
             unsafe { String::from_stack(-1, sq) }.expect("expecting the string we just pushed");
         sq.pop(1);
