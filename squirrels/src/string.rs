@@ -163,8 +163,8 @@ impl<'vm> FromSquirrel<'vm> for String<'vm> {
 }
 
 impl<'vm> IntoSquirrel<'vm> for String<'vm> {
-    fn into_squirrel(self, _sq: &'vm Squirrel) -> Value<'vm> {
-        // TODO add check that this is the same Squirrel VM
+    fn into_squirrel(self, sq: &'vm Squirrel) -> Value<'vm> {
+        self.obj.sq.assert_same_vm(sq);
         Value::String(self)
     }
 }
@@ -188,8 +188,8 @@ impl IntoSquirrel<'_> for &[u8] {
 }
 
 unsafe impl<'vm> PushIntoStack for String<'vm> {
-    fn push_into_stack(self, _sq: &Squirrel) {
-        // TODO add check that this is the same Squirrel VM
+    fn push_into_stack(self, sq: &Squirrel) {
+        self.obj.sq.assert_same_vm(sq);
         self.obj.push_into_stack();
     }
 }

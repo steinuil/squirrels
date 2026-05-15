@@ -608,13 +608,15 @@ macro_rules! object_into_squirrel {
     ($($t:ident),*) => {
         $(
             impl<'vm> IntoSquirrel<'vm> for $t<'vm> {
-                fn into_squirrel(self, _sq: &'vm Squirrel) -> Value<'vm> {
+                fn into_squirrel(self, sq: &'vm Squirrel) -> Value<'vm> {
+                    self.0.sq.assert_same_vm(sq);
                     Value::$t(self)
                 }
             }
 
             unsafe impl<'vm> PushIntoStack for $t<'vm> {
-                fn push_into_stack(self, _sq: &Squirrel) {
+                fn push_into_stack(self, sq: &Squirrel) {
+                    self.0.sq.assert_same_vm(sq);
                     self.0.push_into_stack();
                 }
             }

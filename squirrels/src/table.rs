@@ -75,14 +75,15 @@ impl<'vm> FromSquirrel<'vm> for Table<'vm> {
 }
 
 impl<'vm> IntoSquirrel<'vm> for Table<'vm> {
-    fn into_squirrel(self, _sq: &'vm Squirrel) -> Value<'vm> {
-        // TODO check for VM equality
+    fn into_squirrel(self, sq: &'vm Squirrel) -> Value<'vm> {
+        self.0.sq.assert_same_vm(sq);
         Value::Table(self)
     }
 }
 
 unsafe impl<'vm> PushIntoStack for Table<'vm> {
-    fn push_into_stack(self, _sq: &Squirrel) {
+    fn push_into_stack(self, sq: &Squirrel) {
+        self.0.sq.assert_same_vm(sq);
         self.0.push_into_stack();
     }
 }
