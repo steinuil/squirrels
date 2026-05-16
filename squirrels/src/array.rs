@@ -15,6 +15,9 @@ impl_object_traits!(Array, tagSQObjectType_OT_ARRAY, "array");
 
 // TODO check if any of these methods can actually fail
 impl<'vm> Array<'vm> {
+    /// Gets the value at position `idx` of the array.
+    ///
+    /// Fails if `idx` is out of range.
     pub fn get<V: FromSquirrel<'vm>>(&self, idx: Integer) -> CallResult<'vm, V> {
         self.0.push_into_stack();
         idx.push_into_stack(self.0.sq);
@@ -31,6 +34,9 @@ impl<'vm> Array<'vm> {
         Ok(val?)
     }
 
+    /// Replaces the value at position `idx` of the array.
+    ///
+    /// Fails if `idx` is out of range.
     pub fn set<T: IntoSquirrel<'vm>>(&self, key: Integer, value: T) -> CallResult<'vm, ()> {
         self.0.push_into_stack();
         key.push_into_stack(self.0.sq);
@@ -48,22 +54,19 @@ impl<'vm> Array<'vm> {
         Ok(())
     }
 
-    pub fn append<T: IntoSquirrel<'vm>>(&self, value: T) -> CallResult<'vm, ()> {
+    /// Pushes a value to the back of the array.
+    pub fn append<T: IntoSquirrel<'vm>>(&self, value: T) {
         self.0.push_into_stack();
         value.push_into_stack(self.0.sq);
 
         let ret = unsafe { sq_arrayappend(self.0.sq.vm, -2) };
-        if ret.is_error() {
-            self.0.sq.pop(3);
-
-            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
-        }
-
+        assert!(!ret.is_error(), "sq_arrayappend failed on {:?}", self);
         self.0.sq.pop(1);
-
-        Ok(())
     }
 
+    /// Removes the last element from the array and returns it.
+    ///
+    /// Fails if the array is empty.
     pub fn pop<T: FromSquirrel<'vm>>(&self) -> CallResult<'vm, T> {
         self.0.push_into_stack();
 
@@ -76,9 +79,11 @@ impl<'vm> Array<'vm> {
 
         let v = unsafe { T::from_stack(-1, self.0.sq) };
         self.0.sq.pop(2);
+
         Ok(v?)
     }
 
+    /// Returns the length of the array.
     pub fn len(&self) -> Integer {
         self.0.push_into_stack();
         let len = unsafe { sq_getsize(self.0.sq.vm, -1) };
@@ -86,22 +91,27 @@ impl<'vm> Array<'vm> {
         len
     }
 
+    /// Inserts a value at position `idx` in the array,
+    /// shifting up the elements from `array[idx]`.
+    ///
+    /// Fails if `idx` is out of range.
     pub fn insert<T: IntoSquirrel<'vm>>(&self, idx: Integer, value: T) -> CallResult<'vm, ()> {
         self.0.push_into_stack();
         value.push_into_stack(self.0.sq);
 
         let ret = unsafe { sq_arrayinsert(self.0.sq.vm, -2, idx) };
+        self.0.sq.pop(1);
         if ret.is_error() {
-            // TODO verify that the value is popped before erroring
-            self.0.sq.pop(1);
-
             return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
         }
 
-        self.0.sq.pop(1);
         Ok(())
     }
 
+    /// Removes the item at position `idx` in the array,
+    /// shifting down the elements from `array[idx+1]`.
+    ///
+    /// Fails if `idx` is out of range.
     pub fn remove(&self, idx: Integer) -> CallResult<'vm, ()> {
         self.0.push_into_stack();
 
@@ -114,6 +124,7 @@ impl<'vm> Array<'vm> {
         Ok(())
     }
 
+    /// Reverses all the items of the array in place.
     pub fn reverse(&self) -> CallResult<'vm, ()> {
         self.0.push_into_stack();
 
@@ -126,6 +137,7 @@ impl<'vm> Array<'vm> {
         Ok(())
     }
 
+    /// Clears all items from the array.
     pub fn clear(&self) -> CallResult<'vm, ()> {
         self.0.push_into_stack();
 
@@ -151,6 +163,7 @@ mod tests {
         let arr: Array<'_> = sq.eval("return [123, 456, 789]").unwrap();
         let v: Integer = arr.get(1).unwrap();
         assert_eq!(v, 456);
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
@@ -160,24 +173,26 @@ mod tests {
         arr.set(1, 444).unwrap();
         let v: Integer = arr.get(1).unwrap();
         assert_eq!(v, 444);
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     /// Arrays in Squirrel have to be grown manually.
-    /// Setting an array index out of bounds will cause
+    /// Setting an array index out of range will cause
     /// a runtime error.
     #[test]
     fn array_set_oob() {
         let sq = Squirrel::new(1024);
         let arr: Array<'_> = sq.eval("return [123, 456, 789]").unwrap();
         let err = arr.set(4, 444).unwrap_err();
-        assert!(matches!(err, CallError::Runtime(Value::String(_))))
+        assert!(matches!(err, CallError::Runtime(Value::String(_))));
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
     fn array_append() {
         let sq = Squirrel::new(1024);
         let arr: Array<'_> = sq.eval("return [123, 456, 789]").unwrap();
-        arr.append(321).unwrap();
+        arr.append(321);
         let v: Integer = arr.get(3).unwrap();
         assert_eq!(v, 321);
         assert_eq!(arr.len(), 4);
@@ -190,6 +205,16 @@ mod tests {
         let v: Integer = arr.pop().unwrap();
         assert_eq!(v, 789);
         assert_eq!(arr.len(), 2);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn array_pop_empty() {
+        let sq = Squirrel::new(1024);
+        let arr: Array<'_> = sq.eval("return []").unwrap();
+        let err = arr.pop::<()>().unwrap_err();
+        assert!(matches!(err, CallError::Runtime(_)));
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
