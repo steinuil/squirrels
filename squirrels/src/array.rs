@@ -1,9 +1,10 @@
 use squirrels_sys::{
-    SQTrue, sq_arrayappend, sq_arraypop, sq_get, sq_getsize, sq_set, tagSQObjectType_OT_ARRAY,
+    SQTrue, sq_arrayappend, sq_arrayinsert, sq_arraypop, sq_arrayremove, sq_arrayreverse, sq_clear,
+    sq_get, sq_getsize, sq_set, tagSQObjectType_OT_ARRAY,
 };
 
 use crate::{
-    CallResult, FromSquirrel, Integer, IntoSquirrel, Object, PushIntoStack as _, Result,
+    CallError, CallResult, FromSquirrel, Integer, IntoSquirrel, Object, PushIntoStack as _,
     get_runtime_error, traits::impl_object_traits,
 };
 
@@ -12,8 +13,9 @@ pub struct Array<'vm>(pub(crate) Object<'vm>);
 
 impl_object_traits!(Array, tagSQObjectType_OT_ARRAY, "array");
 
+// TODO check if any of these methods can actually fail
 impl<'vm> Array<'vm> {
-    pub fn get<V: FromSquirrel<'vm>>(&self, idx: Integer) -> Result<Option<V>> {
+    pub fn get<V: FromSquirrel<'vm>>(&self, idx: Integer) -> CallResult<'vm, V> {
         self.0.push_into_stack();
         idx.push_into_stack(self.0.sq);
 
@@ -21,12 +23,12 @@ impl<'vm> Array<'vm> {
         if ret.is_error() {
             self.0.sq.pop(1);
 
-            return Ok(None);
+            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
         }
 
         let val = unsafe { V::from_stack(-1, self.0.sq) };
         self.0.sq.pop(2);
-        val.map(Some)
+        Ok(val?)
     }
 
     pub fn set<T: IntoSquirrel<'vm>>(&self, key: Integer, value: T) -> CallResult<'vm, ()> {
@@ -38,7 +40,7 @@ impl<'vm> Array<'vm> {
         if ret.is_error() {
             self.0.sq.pop(3);
 
-            return Err(crate::CallError::Runtime(get_runtime_error(self.0.sq)));
+            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
         }
 
         self.0.sq.pop(1);
@@ -54,7 +56,7 @@ impl<'vm> Array<'vm> {
         if ret.is_error() {
             self.0.sq.pop(3);
 
-            return Err(crate::CallError::Runtime(get_runtime_error(self.0.sq)));
+            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
         }
 
         self.0.sq.pop(1);
@@ -69,7 +71,7 @@ impl<'vm> Array<'vm> {
         if ret.is_error() {
             self.0.sq.pop(1);
 
-            return Err(crate::CallError::Runtime(get_runtime_error(self.0.sq)));
+            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
         }
 
         let v = unsafe { T::from_stack(-1, self.0.sq) };
@@ -83,6 +85,58 @@ impl<'vm> Array<'vm> {
         self.0.sq.pop(1);
         len
     }
+
+    pub fn insert<T: IntoSquirrel<'vm>>(&self, idx: Integer, value: T) -> CallResult<'vm, ()> {
+        self.0.push_into_stack();
+        value.push_into_stack(self.0.sq);
+
+        let ret = unsafe { sq_arrayinsert(self.0.sq.vm, -2, idx) };
+        if ret.is_error() {
+            // TODO verify that the value is popped before erroring
+            self.0.sq.pop(1);
+
+            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
+        }
+
+        self.0.sq.pop(1);
+        Ok(())
+    }
+
+    pub fn remove(&self, idx: Integer) -> CallResult<'vm, ()> {
+        self.0.push_into_stack();
+
+        let ret = unsafe { sq_arrayremove(self.0.sq.vm, -1, idx) };
+        self.0.sq.pop(1);
+        if ret.is_error() {
+            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
+        }
+
+        Ok(())
+    }
+
+    pub fn reverse(&self) -> CallResult<'vm, ()> {
+        self.0.push_into_stack();
+
+        let ret = unsafe { sq_arrayreverse(self.0.sq.vm, -1) };
+        self.0.sq.pop(1);
+        if ret.is_error() {
+            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
+        }
+
+        Ok(())
+    }
+
+    pub fn clear(&self) -> CallResult<'vm, ()> {
+        self.0.push_into_stack();
+
+        let ret = unsafe { sq_clear(self.0.sq.vm, -1) };
+        self.0.sq.pop(1);
+        if ret.is_error() {
+            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -95,7 +149,7 @@ mod tests {
     fn array_get() {
         let sq = Squirrel::new(1024);
         let arr: Array<'_> = sq.eval("return [123, 456, 789]").unwrap();
-        let v: Integer = arr.get(1).unwrap().unwrap();
+        let v: Integer = arr.get(1).unwrap();
         assert_eq!(v, 456);
     }
 
@@ -104,7 +158,7 @@ mod tests {
         let sq = Squirrel::new(1024);
         let arr: Array<'_> = sq.eval("return [123, 456, 789]").unwrap();
         arr.set(1, 444).unwrap();
-        let v: Integer = arr.get(1).unwrap().unwrap();
+        let v: Integer = arr.get(1).unwrap();
         assert_eq!(v, 444);
     }
 
@@ -124,8 +178,9 @@ mod tests {
         let sq = Squirrel::new(1024);
         let arr: Array<'_> = sq.eval("return [123, 456, 789]").unwrap();
         arr.append(321).unwrap();
-        let v: Integer = arr.get(3).unwrap().unwrap();
+        let v: Integer = arr.get(3).unwrap();
         assert_eq!(v, 321);
+        assert_eq!(arr.len(), 4);
     }
 
     #[test]
@@ -142,5 +197,44 @@ mod tests {
         let sq = Squirrel::new(1024);
         let arr: Array<'_> = sq.eval("return [123, 456, 789]").unwrap();
         assert_eq!(arr.len(), 3);
+    }
+
+    #[test]
+    fn array_insert() {
+        let sq = Squirrel::new(1024);
+        let arr: Array<'_> = sq.eval("return [1, 2, 3]").unwrap();
+        arr.insert(1, 50).unwrap();
+        let v1: Integer = arr.get(1).unwrap();
+        let v2: Integer = arr.get(2).unwrap();
+        assert_eq!(v1, 50);
+        assert_eq!(v2, 2);
+        assert_eq!(arr.len(), 4);
+    }
+
+    #[test]
+    fn array_remove() {
+        let sq = Squirrel::new(1024);
+        let arr: Array<'_> = sq.eval("return [1, 2, 3]").unwrap();
+        arr.remove(1).unwrap();
+        let v: Integer = arr.get(1).unwrap();
+        assert_eq!(v, 3);
+        assert_eq!(arr.len(), 2);
+    }
+
+    #[test]
+    fn array_reverse() {
+        let sq = Squirrel::new(1024);
+        let arr: Array<'_> = sq.eval("return [1, 2, 3]").unwrap();
+        arr.reverse().unwrap();
+        let v: Integer = arr.get(0).unwrap();
+        assert_eq!(v, 3);
+    }
+
+    #[test]
+    fn array_clear() {
+        let sq = Squirrel::new(1024);
+        let arr: Array<'_> = sq.eval("return [1, 2, 3]").unwrap();
+        arr.clear().unwrap();
+        assert_eq!(arr.len(), 0);
     }
 }
