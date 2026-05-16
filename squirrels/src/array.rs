@@ -1,4 +1,4 @@
-use squirrels_sys::{SQFalse, sq_get, sq_newslot, tagSQObjectType_OT_ARRAY};
+use squirrels_sys::{SQFalse, sq_get, sq_newslot, sq_set, tagSQObjectType_OT_ARRAY};
 
 use crate::{
     CallResult, FromSquirrel, Integer, IntoSquirrel, Object, PushIntoStack as _, Result,
@@ -32,7 +32,7 @@ impl<'vm> Array<'vm> {
         key.push_into_stack(self.0.sq);
         value.push_into_stack(self.0.sq);
 
-        let ret = unsafe { sq_newslot(self.0.sq.vm, -3, SQFalse as _) };
+        let ret = unsafe { sq_set(self.0.sq.vm, -3) };
         if ret.is_error() {
             self.0.sq.pop(3);
 
@@ -43,4 +43,25 @@ impl<'vm> Array<'vm> {
 
         Ok(())
     }
+}
+
+#[test]
+fn array_get() {
+    use crate::Squirrel;
+
+    let sq = Squirrel::new(1024);
+    let arr: Array<'_> = sq.eval("return [123, 456, 789]").unwrap();
+    let v: Integer = arr.get(1).unwrap().unwrap();
+    assert_eq!(v, 456);
+}
+
+#[test]
+fn array_set() {
+    use crate::Squirrel;
+
+    let sq = Squirrel::new(1024);
+    let arr: Array<'_> = sq.eval("return [123, 456, 789]").unwrap();
+    arr.set(1, 444).unwrap();
+    let v: Integer = arr.get(1).unwrap().unwrap();
+    assert_eq!(v, 444);
 }
