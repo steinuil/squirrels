@@ -101,6 +101,14 @@ pub struct Squirrel {
 
 unsafe impl Send for Squirrel {}
 
+impl std::fmt::Debug for Squirrel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Squirrel")
+            .field(&format_args!("{:p}", self.vm))
+            .finish()
+    }
+}
+
 impl Squirrel {
     /// Initialize a new Squirrel VM.
     ///

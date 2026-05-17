@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use squirrels_sys::{
     SQTrue, sq_arrayappend, sq_arrayinsert, sq_arraypop, sq_arrayremove, sq_arrayresize,
-    sq_arrayreverse, sq_clear, sq_clone, sq_get, sq_getsize, sq_newarray, sq_rawget, sq_set,
+    sq_arrayreverse, sq_clear, sq_clone, sq_get, sq_getsize, sq_newarray, sq_set,
     tagSQObjectType_OT_ARRAY,
 };
 

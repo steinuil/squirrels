@@ -5,6 +5,16 @@ use crate::{
     Squirrel, Value,
 };
 
+/// A ref-counted handle to a Squirrel string.
+///
+/// Strings in Squirrel are immutable and interned until they are GC'd.
+/// Two different string objects that are alive at the same time will share
+/// the same pointer.
+///
+/// Unlike Rust strings, Squirrel strings may not be valid UTF-8.
+///
+/// Squirrel strings may contain `NUL` bytes, but standard Squirrel functions
+/// like `format` and `print` will truncate at the first `NUL` byte when rendering.
 pub struct String<'vm> {
     pub(crate) obj: Object<'vm>,
     pub(crate) ptr: *const SQChar,
@@ -40,28 +50,44 @@ impl<'vm> String<'vm> {
         })
     }
 
-    pub fn as_bytes(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.ptr as *const _, self.len) }
-    }
-
-    pub fn to_str(&self) -> std::result::Result<&str, std::str::Utf8Error> {
-        std::str::from_utf8(self.as_bytes())
-    }
-
-    pub fn to_string_lossy(&self) -> std::string::String {
-        std::string::String::from_utf8_lossy(self.as_bytes()).into_owned()
-    }
-
-    pub fn from_str(sq: &'vm Squirrel, str: &str) -> Self {
-        Self::from_bytes(sq, str.as_bytes())
-    }
-
-    pub fn from_bytes(sq: &'vm Squirrel, bytes: &[u8]) -> Self {
+    /// Creates and returns an interned string.
+    ///
+    /// Squirrel strings can be arbitrary `[u8]` data including embedded `NUL` bytes,
+    /// so in addition to `&str` and `&String`, you can also pass a plain `&[u8]` here.
+    pub fn new(sq: &'vm Squirrel, bytes: impl AsRef<[u8]>) -> Self {
+        let bytes = bytes.as_ref();
         unsafe { sq_pushstring(sq.vm, bytes.as_ptr() as *const _, bytes.len() as _) };
         let obj =
             unsafe { String::from_stack(-1, sq) }.expect("expecting the string we just pushed");
         sq.pop(1);
         obj
+    }
+
+    /// Gets the bytes that make up this string.
+    pub fn as_bytes(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr as *const _, self.len) }
+    }
+
+    /// Gets a `&str` if the Squirrel string is valid UTF-8.
+    pub fn to_str(&self) -> std::result::Result<&str, std::str::Utf8Error> {
+        std::str::from_utf8(self.as_bytes())
+    }
+
+    /// Converts this string to an owned [`std::string::String`].
+    ///
+    /// Any non-Unicode sequences are replaced with [`char::REPLACEMENT_CHARACTER`].
+    pub fn to_string_lossy(&self) -> std::string::String {
+        std::string::String::from_utf8_lossy(self.as_bytes()).into_owned()
+    }
+
+    /// Gets the length of the string.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Returns `true` if the string is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 }
 
@@ -75,9 +101,9 @@ impl Clone for String<'_> {
     }
 }
 
-impl PartialEq for String<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.ptr == other.ptr
+impl AsRef<[u8]> for String<'_> {
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
     }
 }
 
@@ -98,12 +124,6 @@ where
 {
     fn partial_cmp(&self, other: &T) -> Option<std::cmp::Ordering> {
         self.as_bytes().partial_cmp(other.as_ref())
-    }
-}
-
-impl PartialOrd for String<'_> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
     }
 }
 
@@ -172,19 +192,19 @@ impl<'vm> IntoSquirrel<'vm> for String<'vm> {
 
 impl IntoSquirrel<'_> for &str {
     fn into_squirrel(self, sq: &'_ Squirrel) -> Value<'_> {
-        Value::String(String::from_str(sq, self))
+        Value::String(String::new(sq, self))
     }
 }
 
 impl IntoSquirrel<'_> for std::string::String {
     fn into_squirrel(self, sq: &'_ Squirrel) -> Value<'_> {
-        Value::String(String::from_str(sq, self.as_str()))
+        Value::String(String::new(sq, &self))
     }
 }
 
 impl IntoSquirrel<'_> for &[u8] {
     fn into_squirrel(self, sq: &'_ Squirrel) -> Value<'_> {
-        Value::String(String::from_bytes(sq, self))
+        Value::String(String::new(sq, self))
     }
 }
 
@@ -198,7 +218,7 @@ unsafe impl<'vm> PushIntoStack for String<'vm> {
 #[test]
 fn test_string_from_stack() {
     let sq = Squirrel::new(1024);
-    let str = sq.eval::<String>("return \"test\"").unwrap();
+    let str: String = sq.eval("return \"test\"").unwrap();
     assert_eq!(str.to_str().unwrap(), "test");
 }
 
@@ -207,6 +227,14 @@ fn test_value_from_object() {
     use crate::Value;
 
     let sq = Squirrel::new(1024);
-    let v = sq.eval::<Value>("return 123").unwrap();
-    assert!(matches!(v, Value::Integer(123)));
+    let v: Value = sq.eval("return 123").unwrap();
+    assert_eq!(v, Value::Integer(123));
+}
+
+#[test]
+fn test_string_equality() {
+    let sq = Squirrel::new(1024);
+    let s1: String = sq.eval("return \"test\"").unwrap();
+    let s2: String = sq.eval("return \"test\"").unwrap();
+    assert_eq!(s1, s2);
 }
