@@ -219,7 +219,7 @@ macro_rules! impl_object_traits {
                 if object.obj._type == $tag {
                     Ok($type(object))
                 } else {
-                    Err($crate::Error::Type { expected: "array" })
+                    Err($crate::Error::Type { expected: $name })
                 }
             }
         }
@@ -322,7 +322,8 @@ macro_rules! impl_args_tuple {
                     Ok(( $( unsafe { $name::from_stack($field + 2, sq) }?, )+ ))
                 } else {
                     return Err(Error::Type {
-                        expected: concat!(stringify!(count_args!( $($name),+ )), " arguments"),
+                        // TODO return a better error
+                        expected: "arguments",
                     })
                 }
             }

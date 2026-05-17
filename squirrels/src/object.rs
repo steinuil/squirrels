@@ -80,7 +80,7 @@ impl<'vm> Object<'vm> {
             tagSQObjectType_OT_CLOSURE => ObjectType::Closure,
             tagSQObjectType_OT_NATIVECLOSURE => ObjectType::NativeClosure,
             tagSQObjectType_OT_GENERATOR => ObjectType::Generator,
-            tagSQObjectType_OT_USERPOINTER => ObjectType::Generator,
+            tagSQObjectType_OT_USERPOINTER => ObjectType::UserPointer,
             tagSQObjectType_OT_THREAD => ObjectType::Thread,
             tagSQObjectType_OT_CLASS => ObjectType::Class,
             tagSQObjectType_OT_INSTANCE => ObjectType::Instance,

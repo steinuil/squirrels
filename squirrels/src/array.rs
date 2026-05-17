@@ -21,7 +21,6 @@ pub struct Array<'vm>(pub(crate) Object<'vm>);
 
 impl_object_traits!(Array, tagSQObjectType_OT_ARRAY, "array");
 
-// TODO check if any of these methods can actually fail
 impl<'vm> Array<'vm> {
     /// Creates a new array of the specified `size` filled with `null`s.
     ///
@@ -124,10 +123,12 @@ impl<'vm> Array<'vm> {
         unsafe { value.push_into_stack(self.0.sq) };
 
         let ret = unsafe { sq_arrayinsert(self.0.sq.vm, -2, idx) };
-        self.0.sq.pop(1);
         if ret.is_error() {
+            self.0.sq.pop(2);
+
             return Err(CallError::get_runtime_error(self.0.sq));
         }
+        self.0.sq.pop(1);
 
         Ok(())
     }

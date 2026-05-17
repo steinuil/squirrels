@@ -103,7 +103,7 @@ impl<'vm> Table<'vm> {
     /// Fails if:
     /// * `key` is `null`
     /// * There is no `key` slot in the table.
-    pub fn assign<K, V>(&self, key: K, value: K) -> CallResult<'vm, ()>
+    pub fn assign<K, V>(&self, key: K, value: V) -> CallResult<'vm, ()>
     where
         K: IntoSquirrel<'vm>,
         V: IntoSquirrel<'vm>,
