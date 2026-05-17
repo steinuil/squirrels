@@ -1,6 +1,9 @@
+use std::marker::PhantomData;
+
 use squirrels_sys::{
     SQFalse, SQTrue, sq_clear, sq_deleteslot, sq_get, sq_getsize, sq_newslot, sq_newtable,
-    sq_newtableex, sq_rawdeleteslot, sq_rawget, sq_rawset, sq_set, tagSQObjectType_OT_TABLE,
+    sq_newtableex, sq_next, sq_pushnull, sq_rawdeleteslot, sq_rawget, sq_rawset, sq_set,
+    sq_setdelegate, tagSQObjectType_OT_TABLE,
 };
 
 use crate::{
@@ -214,6 +217,50 @@ impl<'vm> Table<'vm> {
         Ok(val?)
     }
 
+    pub fn contains_key<K>(&self, key: K) -> bool
+    where
+        K: IntoSquirrel<'vm>,
+    {
+        self.0.push_into_stack();
+        unsafe { key.push_into_stack(self.0.sq) };
+
+        !unsafe { sq_rawget(self.0.sq.vm, -2) }.is_error()
+    }
+
+    pub fn iter<K, V>(&self) -> TableSlots<'vm, K, V> {
+        self.0.push_into_stack();
+        unsafe { sq_pushnull(self.0.sq.vm) };
+        TableSlots {
+            sq: self.0.sq,
+            _kv: PhantomData,
+        }
+    }
+
+    pub fn set_delegate(&self, delegate: Option<Table<'vm>>) -> CallResult<'vm, ()> {
+        self.0.push_into_stack();
+        unsafe { delegate.push_into_stack(self.0.sq) };
+
+        let ret = unsafe { sq_setdelegate(self.0.sq.vm, -2) };
+        if ret.is_error() {
+            // sq_setdelegate does not pop on error
+            self.0.sq.pop(2);
+            return Err(CallError::get_runtime_error(self.0.sq));
+        }
+
+        self.0.sq.pop(1);
+        Ok(())
+    }
+
+    pub fn get_delegate(&self) -> Option<Table<'vm>> {
+        self.0.push_into_stack();
+        let ret = unsafe { sq_setdelegate(self.0.sq.vm, -1) };
+        assert!(!ret.is_error(), "sq_getdelegate failed on {:?}", self);
+
+        let delegate = unsafe { Option::<Table<'_>>::from_stack(-1, self.0.sq) };
+        self.0.sq.pop(2);
+        delegate.expect("expected table or null")
+    }
+
     /// Returns the number of slots in the table.
     pub fn len(&self) -> Integer {
         self.0.push_into_stack();
@@ -228,9 +275,48 @@ impl<'vm> Table<'vm> {
     }
 }
 
+pub struct TableSlots<'vm, K, V> {
+    sq: &'vm Squirrel,
+    _kv: PhantomData<(K, V)>,
+}
+
+impl<K, V> Drop for TableSlots<'_, K, V> {
+    fn drop(&mut self) {
+        // Pop the table and the generator at the end
+        // of the iteration.
+        self.sq.pop(2);
+    }
+}
+
+impl<'vm, K, V> Iterator for TableSlots<'vm, K, V>
+where
+    K: FromSquirrel<'vm>,
+    V: FromSquirrel<'vm>,
+{
+    type Item = Result<(K, V)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let ret = unsafe { sq_next(self.sq.vm, -2) };
+        if ret.is_error() {
+            return None;
+        }
+
+        let key = unsafe { K::from_stack(-2, self.sq) };
+        let val = unsafe { V::from_stack(-1, self.sq) };
+        self.sq.pop(2);
+
+        match (key, val) {
+            (Ok(key), Ok(val)) => Some(Ok((key, val))),
+            (Err(e), _) => Some(Err(e)),
+            (_, Err(e)) => Some(Err(e)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::{CallError, Integer, Squirrel};
+    use super::Table;
+    use crate::{CallError, Integer, Squirrel, String};
 
     #[test]
     fn table_get() {
@@ -265,5 +351,31 @@ mod tests {
         // null is not a valid key, so this should fail.
         let err = root_table.set((), 1).unwrap_err();
         assert!(matches!(err, CallError::Runtime(_)));
+    }
+
+    #[test]
+    fn table_iter() {
+        let sq = Squirrel::new(1024);
+        let t: Table = sq.eval("local t = {a=1, b=2, c=3}; return t").unwrap();
+        let mut collected = t
+            .iter::<String<'_>, Integer>()
+            .map(|r| {
+                let (k, v) = r.unwrap();
+
+                (k.to_string_lossy(), v)
+            })
+            .collect::<Vec<_>>();
+
+        collected.sort();
+
+        assert_eq!(
+            &collected,
+            &[
+                ("a".to_string(), 1),
+                ("b".to_string(), 2),
+                ("c".to_string(), 3),
+            ]
+        );
+        assert_eq!(sq.stack_depth(), 0);
     }
 }

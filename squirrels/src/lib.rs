@@ -34,7 +34,7 @@ pub use crate::{
     generator::Generator,
     instance::Instance,
     string::String,
-    table::Table,
+    table::{Table, TableSlots},
     thread::Thread,
     traits::{FromArgs, FromSquirrel, IntoArgs, IntoSquirrel},
     user_data::UserData,
