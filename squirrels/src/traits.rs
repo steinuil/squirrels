@@ -150,6 +150,42 @@ impl IntoSquirrel<'_> for bool {
     }
 }
 
+impl<'vm, T: FromSquirrel<'vm>> FromSquirrel<'vm> for Option<T> {
+    fn from_squirrel(value: Value<'vm>, sq: &'vm Squirrel) -> Result<Self> {
+        match value {
+            Value::Null => Ok(None),
+            v => T::from_squirrel(v, sq).map(Some),
+        }
+    }
+
+    unsafe fn from_stack(idx: Integer, sq: &'vm Squirrel) -> Result<Self> {
+        let obj = Object::from_stack(idx, sq);
+        if obj.obj._type == tagSQObjectType_OT_NULL {
+            Ok(None)
+        } else {
+            unsafe { T::from_stack(idx, sq) }.map(Some)
+        }
+    }
+}
+
+// impl<'vm, T: IntoSquirrel<'vm>> IntoSquirrel<'vm> for Option<T> {
+//     fn into_squirrel(self, sq: &'vm Squirrel) -> Value<'vm> {
+//         match self {
+//             None => Value::Null,
+//             Some(t) => t.into_squirrel(sq),
+//         }
+//     }
+// }
+
+// unsafe impl<T: PushIntoStack> PushIntoStack for Option<T> {
+//     fn push_into_stack(self, sq: &Squirrel) {
+//         match self {
+//             None => unsafe { sq_pushnull(sq.vm) },
+//             Some(t) => t.push_into_stack(sq),
+//         }
+//     }
+// }
+
 /// Implement object traits on object newtype wrappers.
 macro_rules! impl_object_traits {
     ($type:ident, $tag:expr, $name:literal) => {

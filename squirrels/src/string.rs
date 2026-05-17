@@ -57,10 +57,9 @@ impl<'vm> String<'vm> {
     pub fn new(sq: &'vm Squirrel, bytes: impl AsRef<[u8]>) -> Self {
         let bytes = bytes.as_ref();
         unsafe { sq_pushstring(sq.vm, bytes.as_ptr() as *const _, bytes.len() as _) };
-        let obj =
-            unsafe { String::from_stack(-1, sq) }.expect("expecting the string we just pushed");
+        let obj = unsafe { String::from_stack(-1, sq) };
         sq.pop(1);
-        obj
+        obj.expect("expecting the string we just pushed")
     }
 
     /// Gets the bytes that make up this string.

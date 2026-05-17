@@ -25,7 +25,7 @@ use squirrels_sys::{
     sq_compilebuffer, sq_getlasterror, sq_getstackobj, sq_gettop, sq_getuserdata, sq_getvmstate,
     sq_newclosure, sq_newuserdata, sq_open, sq_pop, sq_push, sq_pushbool, sq_pushfloat,
     sq_pushinteger, sq_pushnull, sq_pushobject, sq_pushroottable, sq_pushuserpointer, sq_release,
-    sq_resetobject, sq_setreleasehook, sq_throwerror, sq_throwobject,
+    sq_resetobject, sq_setreleasehook, sq_settop, sq_throwerror, sq_throwobject,
 };
 
 pub use crate::{
@@ -257,6 +257,11 @@ impl Squirrel {
 
     pub fn stack_depth(&self) -> Integer {
         unsafe { sq_gettop(self.vm) }
+    }
+
+    pub(crate) fn resize_stack(&self, idx: Integer) {
+        assert!(idx >= 0);
+        unsafe { sq_settop(self.vm, idx) };
     }
 
     /// Compile the Squirrel program in `src` and push it as a closure on the stack.
