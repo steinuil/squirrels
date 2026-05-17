@@ -29,7 +29,7 @@ use squirrels_sys::{
 };
 
 pub use crate::{
-    array::Array,
+    array::{Array, ArrayItems},
     class::Class,
     closure::{Closure, NativeClosure},
     generator::Generator,

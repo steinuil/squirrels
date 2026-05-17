@@ -1,13 +1,16 @@
+use std::marker::PhantomData;
+
 use squirrels_sys::{
     SQTrue, sq_arrayappend, sq_arrayinsert, sq_arraypop, sq_arrayremove, sq_arrayresize,
     sq_arrayreverse, sq_clear, sq_get, sq_getsize, sq_set, tagSQObjectType_OT_ARRAY,
 };
 
 use crate::{
-    CallError, CallResult, FromSquirrel, Integer, IntoSquirrel, Object, PushIntoStack as _,
+    CallError, CallResult, FromSquirrel, Integer, IntoSquirrel, Object, PushIntoStack as _, Value,
     traits::impl_object_traits,
 };
 
+/// A handle to a Squirrel array.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Array<'vm>(pub(crate) Object<'vm>);
 
@@ -159,12 +162,71 @@ impl<'vm> Array<'vm> {
 
         Ok(())
     }
+
+    /// Returns an iterator over the items of the array.
+    ///
+    /// The items are wrapped in a [`CallResult`], since they are lazily converted
+    /// to the `V` type. If `V` is [`Value`], the iterator will always yield `Ok(Value)`
+    /// unless the array is shrinked during iteration.
+    ///
+    /// Mutating the array length while iterating over it is safe, but it may cause
+    /// the iterator to skip elements or return an error.
+    /// If you need to mutate the length, collect first.
+    pub fn iter<V: FromSquirrel<'vm>>(&self) -> ArrayItems<'vm, V> {
+        ArrayItems {
+            array: self.clone(),
+            idx: 0,
+            len: self.len(),
+            _v: PhantomData,
+        }
+    }
+}
+
+/// An iterator over the items of an [`Array`].
+pub struct ArrayItems<'vm, V: FromSquirrel<'vm>> {
+    array: Array<'vm>,
+    idx: Integer,
+    len: Integer,
+    _v: PhantomData<V>,
+}
+
+impl<'vm, V: FromSquirrel<'vm>> Iterator for ArrayItems<'vm, V> {
+    type Item = CallResult<'vm, V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.idx >= self.len {
+            return None;
+        }
+        let v: V = match self.array.get(self.idx) {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        };
+        self.idx += 1;
+        Some(Ok(v))
+    }
+}
+
+impl<'vm> IntoIterator for Array<'vm> {
+    type Item = CallResult<'vm, Value<'vm>>;
+
+    type IntoIter = ArrayItems<'vm, Value<'vm>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let len = self.len();
+
+        ArrayItems {
+            array: self,
+            idx: 0,
+            len,
+            _v: PhantomData,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::Array;
-    use crate::{CallError, Integer, Squirrel, Value};
+    use crate::{CallError, CallResult, Integer, Squirrel, Value};
 
     /// Arrays in Squirrel are 0-based and not 1-cringed.
     #[test]
@@ -289,5 +351,16 @@ mod tests {
         let arr: Array<'_> = sq.eval("return [1, 2, 3]").unwrap();
         arr.resize(2).unwrap();
         assert_eq!(arr.len(), 2);
+    }
+
+    #[test]
+    fn array_iter() {
+        let sq = Squirrel::new(1024);
+        let arr: Array<'_> = sq.eval("return [1, 2, 3]").unwrap();
+        let vals = arr
+            .iter()
+            .collect::<CallResult<'_, Vec<Integer>>>()
+            .unwrap();
+        assert_eq!(&vals, &[1, 2, 3]);
     }
 }
