@@ -23,9 +23,8 @@ use squirrels_sys::{
     HSQOBJECT, HSQUIRRELVM, SQ_VMSTATE_IDLE, SQ_VMSTATE_RUNNING, SQ_VMSTATE_SUSPENDED, SQFalse,
     SQFloat, SQInteger, SQTrue, SQUnsignedInteger, SQUserPointer, sq_addref, sq_call, sq_close,
     sq_compilebuffer, sq_getlasterror, sq_getstackobj, sq_gettop, sq_getuserdata, sq_getvmstate,
-    sq_newclosure, sq_newuserdata, sq_open, sq_pop, sq_push, sq_pushbool, sq_pushfloat,
-    sq_pushinteger, sq_pushnull, sq_pushobject, sq_pushroottable, sq_pushuserpointer, sq_release,
-    sq_resetobject, sq_setreleasehook, sq_settop, sq_throwerror, sq_throwobject,
+    sq_newclosure, sq_newuserdata, sq_open, sq_pop, sq_push, sq_pushobject, sq_pushroottable,
+    sq_release, sq_resetobject, sq_setreleasehook, sq_settop, sq_throwerror, sq_throwobject,
 };
 
 pub use crate::{
@@ -381,13 +380,11 @@ impl Squirrel {
 
     pub fn push_value(&self, value: &Value<'_>) {
         match value {
-            Value::Null => unsafe { sq_pushnull(self.vm) },
-            Value::Integer(n) => unsafe { sq_pushinteger(self.vm, *n) },
-            Value::Float(n) => unsafe { sq_pushfloat(self.vm, *n) },
-            Value::Bool(b) => unsafe { sq_pushbool(self.vm, if *b { 1 } else { 0 }) },
-            Value::UserPointer(p) => unsafe {
-                sq_pushuserpointer(self.vm, p.as_ptr());
-            },
+            Value::Null => unsafe { ().push_into_stack(self) },
+            Value::Integer(n) => unsafe { n.push_into_stack(self) },
+            Value::Float(n) => unsafe { n.push_into_stack(self) },
+            Value::Bool(b) => unsafe { b.push_into_stack(self) },
+            Value::UserPointer(p) => unsafe { p.push_into_stack(self) },
             Value::String(String { obj, .. })
             | Value::Table(Table(obj))
             | Value::Array(Array(obj))

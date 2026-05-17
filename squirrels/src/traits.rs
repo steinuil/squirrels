@@ -1,6 +1,6 @@
 use squirrels_sys::{
-    SQBool, sq_getbool, sq_getfloat, sq_getinteger, sq_pushfloat, sq_pushinteger, sq_pushnull,
-    tagSQObjectType_OT_NULL,
+    SQBool, sq_getbool, sq_getfloat, sq_getinteger, sq_pushbool, sq_pushfloat, sq_pushinteger,
+    sq_pushnull, tagSQObjectType_OT_NULL,
 };
 
 use crate::{Error, Float, Integer, Object, Result, Squirrel, Value};
@@ -28,18 +28,6 @@ pub trait IntoSquirrel<'vm>: Sized {
         sq.push_value(&v);
     }
 }
-
-// Types that do not have a lifetime bound on `'vm` can have
-// a blanket impl of `PushIntoStack`.
-// unsafe impl<T> PushIntoStack for T
-// where
-//     T: for<'vm> IntoSquirrel<'vm>,
-// {
-//     fn push_into_stack(self, sq: &Squirrel) {
-//         let v = self.into_squirrel(sq);
-//         sq.push_value(&v);
-//     }
-// }
 
 impl FromSquirrel<'_> for () {
     fn from_squirrel(value: Value<'_>, _sq: &'_ Squirrel) -> Result<Self> {
@@ -162,6 +150,12 @@ impl IntoSquirrel<'_> for bool {
     fn into_squirrel(self, _sq: &'_ Squirrel) -> Value<'_> {
         Value::Bool(self)
     }
+
+    unsafe fn push_into_stack(self, sq: &'_ Squirrel) {
+        unsafe {
+            sq_pushbool(sq.vm, if self { 1 } else { 0 });
+        }
+    }
 }
 
 impl<'vm, T: FromSquirrel<'vm>> FromSquirrel<'vm> for Option<T> {
@@ -182,23 +176,21 @@ impl<'vm, T: FromSquirrel<'vm>> FromSquirrel<'vm> for Option<T> {
     }
 }
 
-// impl<'vm, T: IntoSquirrel<'vm>> IntoSquirrel<'vm> for Option<T> {
-//     fn into_squirrel(self, sq: &'vm Squirrel) -> Value<'vm> {
-//         match self {
-//             None => Value::Null,
-//             Some(t) => t.into_squirrel(sq),
-//         }
-//     }
-// }
+impl<'vm, T: IntoSquirrel<'vm>> IntoSquirrel<'vm> for Option<T> {
+    fn into_squirrel(self, sq: &'vm Squirrel) -> Value<'vm> {
+        match self {
+            None => Value::Null,
+            Some(t) => t.into_squirrel(sq),
+        }
+    }
 
-// unsafe impl<T: PushIntoStack> PushIntoStack for Option<T> {
-//     fn push_into_stack(self, sq: &Squirrel) {
-//         match self {
-//             None => unsafe { sq_pushnull(sq.vm) },
-//             Some(t) => t.push_into_stack(sq),
-//         }
-//     }
-// }
+    unsafe fn push_into_stack(self, sq: &'vm Squirrel) {
+        match self {
+            None => unsafe { sq_pushnull(sq.vm) },
+            Some(t) => unsafe { t.push_into_stack(sq) },
+        }
+    }
+}
 
 /// Implement object traits on object newtype wrappers.
 macro_rules! impl_object_traits {

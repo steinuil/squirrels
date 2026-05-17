@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 
-use squirrels_sys::sq_getuserpointer;
+use squirrels_sys::{sq_getuserpointer, sq_pushuserpointer};
 
 use crate::{Error, FromSquirrel, Integer, IntoSquirrel, Result, Squirrel, Value};
 
@@ -49,5 +49,9 @@ impl FromSquirrel<'_> for UserPointer {
 impl IntoSquirrel<'_> for UserPointer {
     fn into_squirrel(self, _sq: &'_ Squirrel) -> Value<'_> {
         Value::UserPointer(self)
+    }
+
+    unsafe fn push_into_stack(self, sq: &'_ Squirrel) {
+        unsafe { sq_pushuserpointer(sq.vm, self.as_ptr()) };
     }
 }
