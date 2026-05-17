@@ -2,12 +2,13 @@ use std::marker::PhantomData;
 
 use squirrels_sys::{
     SQTrue, sq_arrayappend, sq_arrayinsert, sq_arraypop, sq_arrayremove, sq_arrayresize,
-    sq_arrayreverse, sq_clear, sq_clone, sq_get, sq_getsize, sq_set, tagSQObjectType_OT_ARRAY,
+    sq_arrayreverse, sq_clear, sq_clone, sq_get, sq_getsize, sq_newarray, sq_rawget, sq_set,
+    tagSQObjectType_OT_ARRAY,
 };
 
 use crate::{
-    CallError, CallResult, FromSquirrel, Integer, IntoSquirrel, Object, PushIntoStack as _, Value,
-    traits::impl_object_traits,
+    CallError, CallResult, FromSquirrel, Integer, IntoSquirrel, Object, PushIntoStack as _,
+    Squirrel, Value, traits::impl_object_traits,
 };
 
 /// A ref-counted handle to a Squirrel array.
@@ -22,10 +23,26 @@ impl_object_traits!(Array, tagSQObjectType_OT_ARRAY, "array");
 
 // TODO check if any of these methods can actually fail
 impl<'vm> Array<'vm> {
+    /// Creates a new array of the specified `size` filled with `null`s.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `size` is negative.
+    pub fn new(sq: &'vm Squirrel, size: Integer) -> Array<'vm> {
+        assert!(
+            size >= 0,
+            "Array::new: size must be non-negative, got {size}"
+        );
+        unsafe { sq_newarray(sq.vm, size) };
+
+        unsafe { Self::from_stack(-1, sq) }
+            .unwrap_or_else(|_| panic!("sq_newarray did not push an Array"))
+    }
+
     /// Gets the value at position `idx` of the array.
     ///
-    /// Fails if `idx` is out of range.
-    pub fn get<V: FromSquirrel<'vm>>(&self, idx: Integer) -> CallResult<'vm, V> {
+    /// Fails if `idx` is out of range or the conversion from `T` failed.
+    pub fn get<T: FromSquirrel<'vm>>(&self, idx: Integer) -> CallResult<'vm, T> {
         self.0.push_into_stack();
         idx.push_into_stack(self.0.sq);
 
@@ -36,7 +53,7 @@ impl<'vm> Array<'vm> {
             return Err(CallError::get_runtime_error(self.0.sq));
         }
 
-        let val = unsafe { V::from_stack(-1, self.0.sq) };
+        let val = unsafe { T::from_stack(-1, self.0.sq) };
         self.0.sq.pop(2);
         Ok(val?)
     }
@@ -249,6 +266,13 @@ impl<'vm> IntoIterator for Array<'vm> {
 mod tests {
     use super::Array;
     use crate::{CallError, CallResult, Integer, Squirrel, Value};
+
+    #[test]
+    fn array_new() {
+        let sq = Squirrel::new(1024);
+        let arr: Array<'_> = Array::new(&sq, 0);
+        assert_eq!(arr.len(), 0);
+    }
 
     /// Arrays in Squirrel are 0-based and not 1-cringed.
     #[test]
