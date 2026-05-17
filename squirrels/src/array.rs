@@ -204,6 +204,10 @@ impl<'vm, V: FromSquirrel<'vm>> Iterator for ArrayItems<'vm, V> {
         self.idx += 1;
         Some(Ok(v))
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len as _, Some(self.len as _))
+    }
 }
 
 impl<'vm> IntoIterator for Array<'vm> {
