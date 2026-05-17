@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use squirrels_sys::{
     SQTrue, sq_arrayappend, sq_arrayinsert, sq_arraypop, sq_arrayremove, sq_arrayresize,
-    sq_arrayreverse, sq_clear, sq_get, sq_getsize, sq_set, tagSQObjectType_OT_ARRAY,
+    sq_arrayreverse, sq_clear, sq_clone, sq_get, sq_getsize, sq_set, tagSQObjectType_OT_ARRAY,
 };
 
 use crate::{
@@ -10,7 +10,11 @@ use crate::{
     traits::impl_object_traits,
 };
 
-/// A handle to a Squirrel array.
+/// A ref-counted handle to a Squirrel array.
+///
+/// [`Clone::clone`]ing this handle will create a new reference
+/// to the underlying object.
+/// To create a new `Array` object use [`clone_value`](Array::clone_value).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Array<'vm>(pub(crate) Object<'vm>);
 
@@ -167,7 +171,7 @@ impl<'vm> Array<'vm> {
     ///
     /// The items are wrapped in a [`CallResult`], since they are lazily converted
     /// to the `V` type. If `V` is [`Value`], the iterator will always yield `Ok(Value)`
-    /// unless the array is shrinked during iteration.
+    /// unless the array is shrunk during iteration.
     ///
     /// Mutating the array length while iterating over it is safe, but it may cause
     /// the iterator to skip elements or return an error.
@@ -179,6 +183,20 @@ impl<'vm> Array<'vm> {
             len: self.len(),
             _v: PhantomData,
         }
+    }
+
+    /// Create a shallow copy of this `Array` object.
+    pub fn clone_value(&self) -> Array<'vm> {
+        self.0.push_into_stack();
+
+        let ret = unsafe { sq_clone(self.0.sq.vm, -1) };
+        assert!(!ret.is_error(), "sq_clone failed on {:?}", self);
+
+        let new_arr = unsafe { Self::from_stack(-1, self.0.sq) }
+            .unwrap_or_else(|_| panic!("sq_clone on {:?} did not push an Array", self));
+        self.0.sq.pop(2);
+
+        new_arr
     }
 }
 
@@ -366,5 +384,16 @@ mod tests {
             .collect::<CallResult<'_, Vec<Integer>>>()
             .unwrap();
         assert_eq!(&vals, &[1, 2, 3]);
+    }
+
+    #[test]
+    fn array_clone_value() {
+        let sq = Squirrel::new(1024);
+        let arr1: Array<'_> = sq.eval("return [1, 2, 3]").unwrap();
+        let arr2 = arr1.clone_value();
+        arr1.clear();
+
+        assert_eq!(arr1.len(), 0);
+        assert_eq!(arr2.len(), 3);
     }
 }
