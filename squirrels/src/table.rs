@@ -1,9 +1,9 @@
 use std::marker::PhantomData;
 
 use squirrels_sys::{
-    SQFalse, SQTrue, sq_clear, sq_deleteslot, sq_get, sq_getsize, sq_newslot, sq_newtable,
-    sq_newtableex, sq_next, sq_pushnull, sq_rawdeleteslot, sq_rawget, sq_rawset, sq_set,
-    sq_setdelegate, tagSQObjectType_OT_TABLE,
+    SQFalse, SQTrue, sq_clear, sq_clone, sq_deleteslot, sq_get, sq_getsize, sq_newslot,
+    sq_newtable, sq_newtableex, sq_next, sq_pushnull, sq_rawdeleteslot, sq_rawget, sq_rawset,
+    sq_set, sq_setdelegate, tagSQObjectType_OT_TABLE,
 };
 
 use crate::{
@@ -11,6 +11,10 @@ use crate::{
     traits::impl_object_traits,
 };
 
+/// A ref-counted handle to a Squirrel table.
+///
+/// A table is a heterogeneous pairing of `key` -> `value`. A key can be any Squirrel type
+/// except for `null`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Table<'vm>(pub(crate) Object<'vm>);
 
@@ -272,6 +276,20 @@ impl<'vm> Table<'vm> {
     /// Returns `true` if the table is empty.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Create a shallow copy of this `Table` object.
+    pub fn clone_value(&self) -> Self {
+        self.0.push_into_stack();
+
+        let ret = unsafe { sq_clone(self.0.sq.vm, -1) };
+        assert!(!ret.is_error(), "sq_clone failed on {:?}", self);
+
+        let new_arr = unsafe { Self::from_stack(-1, self.0.sq) }
+            .unwrap_or_else(|_| panic!("sq_clone failed on {:?}", self));
+        self.0.sq.pop(2);
+
+        new_arr
     }
 }
 

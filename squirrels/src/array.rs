@@ -211,7 +211,7 @@ impl<'vm> Array<'vm> {
         assert!(!ret.is_error(), "sq_clone failed on {:?}", self);
 
         let new_arr = unsafe { Self::from_stack(-1, self.0.sq) }
-            .unwrap_or_else(|_| panic!("sq_clone on {:?} did not push an Array", self));
+            .unwrap_or_else(|_| panic!("sq_clone failed on {:?}", self));
         self.0.sq.pop(2);
 
         new_arr
