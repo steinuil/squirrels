@@ -73,6 +73,15 @@ pub enum CallError<'vm> {
     Other(#[from] Error),
 }
 
+impl<'vm> CallError<'vm> {
+    pub(crate) fn get_runtime_error(sq: &'vm Squirrel) -> Self {
+        unsafe { sq_getlasterror(sq.vm) };
+        let err = Object::from_stack(-1, sq);
+        sq.pop(1);
+        Self::Runtime(err.into_value())
+    }
+}
+
 pub type Integer = SQInteger;
 pub type Float = SQFloat;
 

@@ -1,11 +1,11 @@
 use squirrels_sys::{
-    SQTrue, sq_arrayappend, sq_arrayinsert, sq_arraypop, sq_arrayremove, sq_arrayreverse, sq_clear,
-    sq_get, sq_getsize, sq_set, tagSQObjectType_OT_ARRAY,
+    SQTrue, sq_arrayappend, sq_arrayinsert, sq_arraypop, sq_arrayremove, sq_arrayresize,
+    sq_arrayreverse, sq_clear, sq_get, sq_getsize, sq_set, tagSQObjectType_OT_ARRAY,
 };
 
 use crate::{
     CallError, CallResult, FromSquirrel, Integer, IntoSquirrel, Object, PushIntoStack as _,
-    get_runtime_error, traits::impl_object_traits,
+    traits::impl_object_traits,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -26,7 +26,7 @@ impl<'vm> Array<'vm> {
         if ret.is_error() {
             self.0.sq.pop(1);
 
-            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
+            return Err(CallError::get_runtime_error(self.0.sq));
         }
 
         let val = unsafe { V::from_stack(-1, self.0.sq) };
@@ -46,7 +46,7 @@ impl<'vm> Array<'vm> {
         if ret.is_error() {
             self.0.sq.pop(3);
 
-            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
+            return Err(CallError::get_runtime_error(self.0.sq));
         }
 
         self.0.sq.pop(1);
@@ -74,7 +74,7 @@ impl<'vm> Array<'vm> {
         if ret.is_error() {
             self.0.sq.pop(1);
 
-            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
+            return Err(CallError::get_runtime_error(self.0.sq));
         }
 
         let v = unsafe { T::from_stack(-1, self.0.sq) };
@@ -102,7 +102,7 @@ impl<'vm> Array<'vm> {
         let ret = unsafe { sq_arrayinsert(self.0.sq.vm, -2, idx) };
         self.0.sq.pop(1);
         if ret.is_error() {
-            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
+            return Err(CallError::get_runtime_error(self.0.sq));
         }
 
         Ok(())
@@ -118,33 +118,43 @@ impl<'vm> Array<'vm> {
         let ret = unsafe { sq_arrayremove(self.0.sq.vm, -1, idx) };
         self.0.sq.pop(1);
         if ret.is_error() {
-            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
+            return Err(CallError::get_runtime_error(self.0.sq));
         }
 
         Ok(())
     }
 
     /// Reverses all the items of the array in place.
-    pub fn reverse(&self) -> CallResult<'vm, ()> {
+    pub fn reverse(&self) {
         self.0.push_into_stack();
 
         let ret = unsafe { sq_arrayreverse(self.0.sq.vm, -1) };
         self.0.sq.pop(1);
-        if ret.is_error() {
-            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
-        }
-
-        Ok(())
+        assert!(!ret.is_error(), "sq_arrayreverse failed on {:?}", self);
     }
 
     /// Clears all items from the array.
-    pub fn clear(&self) -> CallResult<'vm, ()> {
+    pub fn clear(&self) {
         self.0.push_into_stack();
 
         let ret = unsafe { sq_clear(self.0.sq.vm, -1) };
         self.0.sq.pop(1);
+        assert!(!ret.is_error(), "sq_clear failed on {:?}", self);
+    }
+
+    /// Grows or shrinks the array to the `new_size`.
+    ///
+    /// If `new_size` is > `array.len()`, the new slots will be filled
+    /// with `null`s.
+    ///
+    /// Fails if `new_size` is negative.
+    pub fn resize(&self, new_size: Integer) -> CallResult<'vm, ()> {
+        self.0.push_into_stack();
+
+        let ret = unsafe { sq_arrayresize(self.0.sq.vm, -1, new_size) };
+        self.0.sq.pop(1);
         if ret.is_error() {
-            return Err(CallError::Runtime(get_runtime_error(self.0.sq)));
+            return Err(CallError::get_runtime_error(self.0.sq));
         }
 
         Ok(())
@@ -250,7 +260,7 @@ mod tests {
     fn array_reverse() {
         let sq = Squirrel::new(1024);
         let arr: Array<'_> = sq.eval("return [1, 2, 3]").unwrap();
-        arr.reverse().unwrap();
+        arr.reverse();
         let v: Integer = arr.get(0).unwrap();
         assert_eq!(v, 3);
     }
@@ -259,7 +269,25 @@ mod tests {
     fn array_clear() {
         let sq = Squirrel::new(1024);
         let arr: Array<'_> = sq.eval("return [1, 2, 3]").unwrap();
-        arr.clear().unwrap();
+        arr.clear();
         assert_eq!(arr.len(), 0);
+    }
+
+    #[test]
+    fn array_resize_grow() {
+        let sq = Squirrel::new(1024);
+        let arr: Array<'_> = sq.eval("return [1, 2, 3]").unwrap();
+        arr.resize(5).unwrap();
+        assert_eq!(arr.len(), 5);
+        let v: Value<'_> = arr.get(4).unwrap();
+        assert_eq!(v, Value::Null);
+    }
+
+    #[test]
+    fn array_resize_shrink() {
+        let sq = Squirrel::new(1024);
+        let arr: Array<'_> = sq.eval("return [1, 2, 3]").unwrap();
+        arr.resize(2).unwrap();
+        assert_eq!(arr.len(), 2);
     }
 }

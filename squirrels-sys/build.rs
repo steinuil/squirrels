@@ -32,6 +32,7 @@ fn main() {
 
     cc::Build::new()
         .include("squirrel-3.2/include")
+        .flag("-O2")
         .file("squirrel_print_shim.c")
         .out_dir(dst.join("lib"))
         .compile("squirrel_shim");
