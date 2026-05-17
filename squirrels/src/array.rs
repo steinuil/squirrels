@@ -7,8 +7,8 @@ use squirrels_sys::{
 };
 
 use crate::{
-    CallError, CallResult, FromSquirrel, Integer, IntoSquirrel, Object, PushIntoStack as _,
-    Squirrel, Value, traits::impl_object_traits,
+    CallError, CallResult, FromSquirrel, Integer, IntoSquirrel, Object, Squirrel, Value,
+    traits::impl_object_traits,
 };
 
 /// A ref-counted handle to a Squirrel array.
@@ -44,7 +44,7 @@ impl<'vm> Array<'vm> {
     /// Fails if `idx` is out of range or the conversion from `T` failed.
     pub fn get<T: FromSquirrel<'vm>>(&self, idx: Integer) -> CallResult<'vm, T> {
         self.0.push_into_stack();
-        idx.push_into_stack(self.0.sq);
+        unsafe { idx.push_into_stack(self.0.sq) };
 
         let ret = unsafe { sq_get(self.0.sq.vm, -2) };
         if ret.is_error() {
@@ -63,8 +63,8 @@ impl<'vm> Array<'vm> {
     /// Fails if `idx` is out of range.
     pub fn set<T: IntoSquirrel<'vm>>(&self, key: Integer, value: T) -> CallResult<'vm, ()> {
         self.0.push_into_stack();
-        key.push_into_stack(self.0.sq);
-        value.push_into_stack(self.0.sq);
+        unsafe { key.push_into_stack(self.0.sq) };
+        unsafe { value.push_into_stack(self.0.sq) };
 
         let ret = unsafe { sq_set(self.0.sq.vm, -3) };
         if ret.is_error() {
@@ -81,7 +81,7 @@ impl<'vm> Array<'vm> {
     /// Pushes a value to the back of the array.
     pub fn append<T: IntoSquirrel<'vm>>(&self, value: T) {
         self.0.push_into_stack();
-        value.push_into_stack(self.0.sq);
+        unsafe { value.push_into_stack(self.0.sq) };
 
         let ret = unsafe { sq_arrayappend(self.0.sq.vm, -2) };
         assert!(!ret.is_error(), "sq_arrayappend failed on {:?}", self);
@@ -121,7 +121,7 @@ impl<'vm> Array<'vm> {
     /// Fails if `idx` is out of range.
     pub fn insert<T: IntoSquirrel<'vm>>(&self, idx: Integer, value: T) -> CallResult<'vm, ()> {
         self.0.push_into_stack();
-        value.push_into_stack(self.0.sq);
+        unsafe { value.push_into_stack(self.0.sq) };
 
         let ret = unsafe { sq_arrayinsert(self.0.sq.vm, -2, idx) };
         self.0.sq.pop(1);

@@ -1,8 +1,7 @@
 use squirrels_sys::{SQChar, sq_getstringandsize, sq_pushstring, tagSQObjectType_OT_STRING};
 
 use crate::{
-    Error, FromSquirrel, Integer, IntoSquirrel, Object, ObjectType, PushIntoStack, Result,
-    Squirrel, Value,
+    Error, FromSquirrel, Integer, IntoSquirrel, Object, ObjectType, Result, Squirrel, Value,
 };
 
 /// A ref-counted handle to a Squirrel string.
@@ -187,6 +186,11 @@ impl<'vm> IntoSquirrel<'vm> for String<'vm> {
         self.obj.sq.assert_same_vm(sq);
         Value::String(self)
     }
+
+    unsafe fn push_into_stack(self, sq: &Squirrel) {
+        self.obj.sq.assert_same_vm(sq);
+        self.obj.push_into_stack();
+    }
 }
 
 impl IntoSquirrel<'_> for &str {
@@ -204,13 +208,6 @@ impl IntoSquirrel<'_> for std::string::String {
 impl IntoSquirrel<'_> for &[u8] {
     fn into_squirrel(self, sq: &'_ Squirrel) -> Value<'_> {
         Value::String(String::new(sq, self))
-    }
-}
-
-unsafe impl<'vm> PushIntoStack for String<'vm> {
-    fn push_into_stack(self, sq: &Squirrel) {
-        self.obj.sq.assert_same_vm(sq);
-        self.obj.push_into_stack();
     }
 }
 

@@ -54,7 +54,7 @@ impl<'vm> Table<'vm> {
         V: FromSquirrel<'vm>,
     {
         self.0.push_into_stack();
-        key.push_into_stack(self.0.sq);
+        unsafe { key.push_into_stack(self.0.sq) };
 
         let ret = unsafe { sq_get(self.0.sq.vm, -2) };
         if ret.is_error() {
@@ -81,8 +81,8 @@ impl<'vm> Table<'vm> {
         V: IntoSquirrel<'vm>,
     {
         self.0.push_into_stack();
-        key.push_into_stack(self.0.sq);
-        value.push_into_stack(self.0.sq);
+        unsafe { key.push_into_stack(self.0.sq) };
+        unsafe { value.push_into_stack(self.0.sq) };
 
         let ret = unsafe { sq_newslot(self.0.sq.vm, -3, SQFalse as _) };
         if ret.is_error() {
@@ -109,8 +109,8 @@ impl<'vm> Table<'vm> {
         V: IntoSquirrel<'vm>,
     {
         self.0.push_into_stack();
-        key.push_into_stack(self.0.sq);
-        value.push_into_stack(self.0.sq);
+        unsafe { key.push_into_stack(self.0.sq) };
+        unsafe { value.push_into_stack(self.0.sq) };
 
         let ret = unsafe { sq_set(self.0.sq.vm, -3) };
         if ret.is_error() {
@@ -137,7 +137,7 @@ impl<'vm> Table<'vm> {
     {
         let prev_top = self.0.sq.stack_depth();
         self.0.push_into_stack();
-        key.push_into_stack(self.0.sq);
+        unsafe { key.push_into_stack(self.0.sq) };
 
         let ret = unsafe { sq_deleteslot(self.0.sq.vm, -2, SQTrue as _) };
         if ret.is_error() {
@@ -167,7 +167,7 @@ impl<'vm> Table<'vm> {
         V: FromSquirrel<'vm>,
     {
         self.0.push_into_stack();
-        key.push_into_stack(self.0.sq);
+        unsafe { key.push_into_stack(self.0.sq) };
 
         let ret = unsafe { sq_rawget(self.0.sq.vm, -2) };
         if ret.is_error() {
@@ -186,8 +186,8 @@ impl<'vm> Table<'vm> {
         V: IntoSquirrel<'vm>,
     {
         self.0.push_into_stack();
-        key.push_into_stack(self.0.sq);
-        value.push_into_stack(self.0.sq);
+        unsafe { key.push_into_stack(self.0.sq) };
+        unsafe { value.push_into_stack(self.0.sq) };
 
         let ret = unsafe { sq_rawset(self.0.sq.vm, -3) };
         self.0.sq.pop(1);
@@ -204,7 +204,7 @@ impl<'vm> Table<'vm> {
         V: FromSquirrel<'vm>,
     {
         self.0.push_into_stack();
-        key.push_into_stack(self.0.sq);
+        unsafe { key.push_into_stack(self.0.sq) };
 
         let ret = unsafe { sq_rawdeleteslot(self.0.sq.vm, -2, SQTrue as _) };
         assert!(!ret.is_error(), "sq_rawdeleteslot failed for {:?}", self);

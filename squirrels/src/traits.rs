@@ -1,4 +1,7 @@
-use squirrels_sys::{SQBool, sq_getbool, sq_getfloat, sq_getinteger, tagSQObjectType_OT_NULL};
+use squirrels_sys::{
+    SQBool, sq_getbool, sq_getfloat, sq_getinteger, sq_pushfloat, sq_pushinteger, sq_pushnull,
+    tagSQObjectType_OT_NULL,
+};
 
 use crate::{Error, Float, Integer, Object, Result, Squirrel, Value};
 
@@ -7,7 +10,6 @@ pub trait FromSquirrel<'vm>: Sized {
     /// Performs the conversion.
     fn from_squirrel(value: Value<'vm>, sq: &'vm Squirrel) -> Result<Self>;
 
-    #[doc(hidden)]
     #[inline]
     unsafe fn from_stack(idx: Integer, sq: &'vm Squirrel) -> Result<Self> {
         let value = Object::from_stack(idx, sq).into_value();
@@ -15,29 +17,29 @@ pub trait FromSquirrel<'vm>: Sized {
     }
 }
 
-/// Trait for types that can be pushed into the Squirrel stack.
-pub unsafe trait PushIntoStack {
-    /// Pushes the value to the top of the Squirrel stack.
-    fn push_into_stack(self, sq: &Squirrel);
-}
-
 /// Trait for types convertible to [`Value`].
-pub trait IntoSquirrel<'vm>: PushIntoStack + Sized {
+pub trait IntoSquirrel<'vm>: Sized {
     /// Performs the conversion.
     fn into_squirrel(self, sq: &'vm Squirrel) -> Value<'vm>;
-}
 
-// Types that do not have a lifetime bound on `'vm` can have
-// a blanket impl of `PushIntoStack`.
-unsafe impl<T> PushIntoStack for T
-where
-    T: for<'vm> IntoSquirrel<'vm>,
-{
-    fn push_into_stack(self, sq: &Squirrel) {
+    /// Pushes the value to the top of the Squirrel stack.
+    unsafe fn push_into_stack(self, sq: &'vm Squirrel) {
         let v = self.into_squirrel(sq);
         sq.push_value(&v);
     }
 }
+
+// Types that do not have a lifetime bound on `'vm` can have
+// a blanket impl of `PushIntoStack`.
+// unsafe impl<T> PushIntoStack for T
+// where
+//     T: for<'vm> IntoSquirrel<'vm>,
+// {
+//     fn push_into_stack(self, sq: &Squirrel) {
+//         let v = self.into_squirrel(sq);
+//         sq.push_value(&v);
+//     }
+// }
 
 impl FromSquirrel<'_> for () {
     fn from_squirrel(value: Value<'_>, _sq: &'_ Squirrel) -> Result<Self> {
@@ -62,6 +64,10 @@ impl FromSquirrel<'_> for () {
 impl IntoSquirrel<'_> for () {
     fn into_squirrel(self, _sq: &'_ Squirrel) -> Value<'_> {
         Value::Null
+    }
+
+    unsafe fn push_into_stack(self, sq: &Squirrel) {
+        unsafe { sq_pushnull(sq.vm) };
     }
 }
 
@@ -94,6 +100,10 @@ impl IntoSquirrel<'_> for Integer {
     fn into_squirrel(self, _sq: &'_ Squirrel) -> Value<'_> {
         Value::Integer(self)
     }
+
+    unsafe fn push_into_stack(self, sq: &Squirrel) {
+        unsafe { sq_pushinteger(sq.vm, self) };
+    }
 }
 
 impl FromSquirrel<'_> for Float {
@@ -120,6 +130,10 @@ impl FromSquirrel<'_> for Float {
 impl IntoSquirrel<'_> for Float {
     fn into_squirrel(self, _sq: &'_ Squirrel) -> Value<'_> {
         Value::Float(self)
+    }
+
+    unsafe fn push_into_stack(self, sq: &Squirrel) {
+        unsafe { sq_pushfloat(sq.vm, self) };
     }
 }
 
@@ -223,10 +237,8 @@ macro_rules! impl_object_traits {
                 self.0.sq.assert_same_vm(sq);
                 $crate::Value::$type(self)
             }
-        }
 
-        unsafe impl<'vm> $crate::PushIntoStack for $type<'vm> {
-            fn push_into_stack(self, sq: &$crate::Squirrel) {
+            unsafe fn push_into_stack(self, sq: &$crate::Squirrel) {
                 self.0.sq.assert_same_vm(sq);
                 self.0.push_into_stack();
             }
@@ -240,8 +252,8 @@ mod sealed {
     pub trait Sealed {}
 }
 
-pub trait IntoArgs: sealed::Sealed {
-    fn push_args(self, sq: &Squirrel) -> Integer;
+pub trait IntoArgs<'vm>: sealed::Sealed {
+    fn push_args(self, sq: &'vm Squirrel) -> Integer;
 }
 
 pub trait FromArgs<'vm>: sealed::Sealed + Sized {
@@ -250,7 +262,7 @@ pub trait FromArgs<'vm>: sealed::Sealed + Sized {
 
 impl sealed::Sealed for () {}
 
-impl IntoArgs for () {
+impl IntoArgs<'_> for () {
     fn push_args(self, _sq: &Squirrel) -> Integer {
         0
     }
@@ -270,12 +282,12 @@ impl FromArgs<'_> for () {
 
 impl<T> sealed::Sealed for Vec<T> {}
 
-impl<'vm, T: IntoSquirrel<'vm>> IntoArgs for Vec<T> {
-    fn push_args(self, sq: &Squirrel) -> Integer {
+impl<'vm, T: IntoSquirrel<'vm>> IntoArgs<'vm> for Vec<T> {
+    fn push_args(self, sq: &'vm Squirrel) -> Integer {
         let len = self.len() as Integer;
 
         for item in self {
-            item.push_into_stack(sq);
+            unsafe { item.push_into_stack(sq) };
         }
 
         len
@@ -305,9 +317,9 @@ macro_rules! impl_args_tuple {
     ( $( $field:tt = $name:ident ),+ $( , )? ) => {
         impl< $( $name ),+ > sealed::Sealed for ( $( $name, )+ ) {}
 
-        impl<'vm, $( $name: IntoSquirrel<'vm> ),+ > IntoArgs for ( $( $name, )+ ) {
-            fn push_args(self, sq: &Squirrel) -> Integer {
-                $( self.$field.push_into_stack(sq); )+
+        impl<'vm, $( $name: IntoSquirrel<'vm> ),+ > IntoArgs<'vm> for ( $( $name, )+ ) {
+            fn push_args(self, sq: &'vm Squirrel) -> Integer {
+                $( unsafe { self.$field.push_into_stack(sq) }; )+
                 count_args!( $( $name ),+ ) as Integer
             }
         }

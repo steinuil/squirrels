@@ -1,7 +1,6 @@
 use crate::{
     Array, Class, Closure, Float, FromSquirrel, Generator, Instance, Integer, IntoSquirrel,
-    NativeClosure, Object, PushIntoStack, Result, Squirrel, String, Table, Thread, UserData,
-    UserPointer, WeakRef,
+    NativeClosure, Object, Result, Squirrel, String, Table, Thread, UserData, UserPointer, WeakRef,
 };
 
 /// A dynamically typed Squirrel value.
@@ -99,10 +98,8 @@ impl<'vm> IntoSquirrel<'vm> for Value<'vm> {
 
         self
     }
-}
 
-unsafe impl<'vm> PushIntoStack for Value<'vm> {
-    fn push_into_stack(self, sq: &Squirrel) {
+    unsafe fn push_into_stack(self, sq: &Squirrel) {
         sq.push_value(&self);
     }
 }

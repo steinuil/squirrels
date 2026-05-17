@@ -37,7 +37,7 @@ pub use crate::{
     string::String,
     table::Table,
     thread::Thread,
-    traits::{FromArgs, FromSquirrel, IntoArgs, IntoSquirrel, PushIntoStack},
+    traits::{FromArgs, FromSquirrel, IntoArgs, IntoSquirrel},
     user_data::UserData,
     user_pointer::UserPointer,
     value::Value,
@@ -212,7 +212,7 @@ where
         let f: &F = unsafe { &*(*(user_data as *const *const F)) };
 
         let sq = unsafe { Squirrel::from_raw_borrowed(v) };
-        let sq: &Squirrel = &*sq;
+        let sq: &'vm Squirrel = unsafe { std::mem::transmute::<&Squirrel, &'vm Squirrel>(&*sq) };
 
         let args = match A::from_args(top - 2, sq) {
             Ok(a) => a,
@@ -225,11 +225,11 @@ where
 
         match f(args) {
             Ok(r) => {
-                r.push_into_stack(sq);
+                unsafe { r.push_into_stack(sq) };
                 1
             }
             Err(value) => {
-                value.push_into_stack(sq);
+                unsafe { value.push_into_stack(sq) };
                 unsafe { sq_throwobject(v) }.0
             }
         }

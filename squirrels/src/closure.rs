@@ -13,7 +13,7 @@ pub struct Closure<'vm>(pub(crate) Object<'vm>);
 impl_object_traits!(Closure, tagSQObjectType_OT_CLOSURE, "closure");
 
 impl<'vm> Closure<'vm> {
-    pub fn call<A: IntoArgs, T: FromSquirrel<'vm>>(&self, args: A) -> CallResult<'vm, T> {
+    pub fn call<A: IntoArgs<'vm>, T: FromSquirrel<'vm>>(&self, args: A) -> CallResult<'vm, T> {
         call_closure(&self.0, args)
     }
 }
@@ -28,12 +28,12 @@ impl_object_traits!(
 );
 
 impl<'vm> NativeClosure<'vm> {
-    pub fn call<A: IntoArgs, T: FromSquirrel<'vm>>(&self, args: A) -> CallResult<'vm, T> {
+    pub fn call<A: IntoArgs<'vm>, T: FromSquirrel<'vm>>(&self, args: A) -> CallResult<'vm, T> {
         call_closure(&self.0, args)
     }
 }
 
-fn call_closure<'vm, A: IntoArgs, T: FromSquirrel<'vm>>(
+fn call_closure<'vm, A: IntoArgs<'vm>, T: FromSquirrel<'vm>>(
     obj: &Object<'vm>,
     args: A,
 ) -> CallResult<'vm, T> {
