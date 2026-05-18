@@ -263,8 +263,8 @@ impl Squirrel {
         unsafe { sq_settop(self.vm, idx) };
     }
 
-    /// Compile the Squirrel program in `src` and push it as a closure on the stack.
-    pub fn compile_str(&self, src: &str, source_name: &CStr) -> Result<()> {
+    /// Compile the Squirrel program in `src` and return it as a [`Closure`].
+    pub fn compile_str(&self, src: &str, source_name: &CStr) -> Result<Closure<'_>> {
         compiler_error_handler::clear_error(self.vm);
 
         let ret = unsafe {
@@ -276,44 +276,31 @@ impl Squirrel {
                 SQTrue as _,
             )
         };
-
         if ret.is_error() {
             let e = compiler_error_handler::take_error(self.vm)
                 .expect("sq_compilebuffer failed but no compile error was captured");
-            Err(Error::Compile {
+            return Err(Error::Compile {
                 description: e.description,
                 source_name: e.source_name,
                 line: e.line,
                 column: e.column,
-            })
-        } else {
-            Ok(())
+            });
         }
+
+        let closure = unsafe { Closure::from_stack(-1, self) };
+        self.pop(1);
+        Ok(closure.expect("expecting the closure we just compiled"))
     }
 
     /// Evaluate the Squirrel program in `src` and return its output value.
     pub fn eval<'vm, T: FromSquirrel<'vm>>(&'vm self, src: &str) -> CallResult<'vm, T> {
         self.push_root_table();
 
-        if let Err(e) = self.compile_str(src, c"=eval") {
-            self.pop(1);
-            return Err(e.into());
-        }
+        let compile_result = self.compile_str(src, c"=eval");
+        self.pop(1);
+        let closure = compile_result?;
 
-        // Push the root table again to use as the argument
-        // for the compiled closure.
-        unsafe { sq_push(self.vm, -2) };
-
-        let ret = unsafe { sq_call(self.vm, 1, SQTrue as _, SQFalse as _) };
-        if ret.is_error() {
-            self.pop(2);
-
-            return Err(CallError::Runtime(get_runtime_error(self)));
-        }
-
-        let val = unsafe { T::from_stack(-1, self) };
-        self.pop(3);
-        Ok(val?)
+        closure.call(())
     }
 
     pub fn root_table(&self) -> Table<'_> {
