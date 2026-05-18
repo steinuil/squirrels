@@ -1,10 +1,13 @@
+use std::marker::PhantomData;
+
 use squirrels_sys::{
-    SQFalse, SQTrue, sq_createinstance, sq_getbase, sq_newclass, tagSQObjectType_OT_CLASS,
+    HSQMEMBERHANDLE, SQFalse, SQTrue, sq_createinstance, sq_getbase, sq_newclass,
+    sq_setclassudsize, tagSQObjectType_OT_CLASS,
 };
 
 use crate::{
-    CallResult, FromSquirrel as _, Instance, IntoArgs, IntoSquirrel, Object, Squirrel,
-    closure::call_closure, traits::impl_object_traits,
+    CallError, CallResult, FromSquirrel, Instance, Integer, IntoArgs, IntoSquirrel, Object,
+    Squirrel, String, closure::call_closure, traits::impl_object_traits,
 };
 
 /// A ref-counted handle to a Squirrel class.
@@ -73,9 +76,108 @@ impl<'vm> Class<'vm> {
     {
         self.0.push_into_stack();
 
-        // env placeholder
+        // Placeholder. This is replaced with the instance when
+        // the constructor is called.
         unsafe { ().push_into_stack(self.0.sq) };
 
         call_closure(&self.0, args)
     }
+
+    pub fn new_member<K, V, A>(
+        &self,
+        key: K,
+        value: V,
+        attr: A,
+        is_static: bool,
+    ) -> CallResult<'vm, ()>
+    where
+        K: IntoSquirrel<'vm>,
+        V: IntoSquirrel<'vm>,
+        A: IntoSquirrel<'vm>,
+    {
+        todo!()
+    }
+
+    pub fn raw_new_member<K, V, A>(
+        &self,
+        key: K,
+        value: V,
+        attr: A,
+        is_static: bool,
+    ) -> CallResult<'vm, ()>
+    where
+        K: IntoSquirrel<'vm>,
+        V: IntoSquirrel<'vm>,
+        A: IntoSquirrel<'vm>,
+    {
+        todo!()
+    }
+
+    pub fn new_slot<K, V>(&self, key: K, value: V, is_static: bool) -> CallResult<'vm, ()>
+    where
+        K: IntoSquirrel<'vm>,
+        V: IntoSquirrel<'vm>,
+    {
+        todo!()
+    }
+
+    pub fn get<K, V>(&self, key: K) -> CallResult<'vm, V>
+    where
+        K: IntoSquirrel<'vm>,
+        V: FromSquirrel<'vm>,
+    {
+        todo!()
+    }
+    pub fn set<K, V>(&self, key: K, value: V) -> CallResult<'vm, ()>
+    where
+        K: IntoSquirrel<'vm>,
+        V: IntoSquirrel<'vm>,
+    {
+        todo!()
+    }
+    pub fn raw_get<K, V>(&self, key: K) -> CallResult<'vm, V>
+    where
+        K: IntoSquirrel<'vm>,
+        V: FromSquirrel<'vm>,
+    {
+        todo!()
+    }
+
+    pub fn raw_set<K, V>(&self, key: K, value: V) -> CallResult<'vm, ()>
+    where
+        K: IntoSquirrel<'vm>,
+        V: IntoSquirrel<'vm>,
+    {
+        todo!()
+    }
+
+    pub fn member_handle(&self, name: String<'vm>) -> CallResult<'vm, MemberHandle<'vm>> {
+        todo!()
+    }
+
+    /// Sets the user data size of a class.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `size` is negative.
+    pub fn set_instance_user_data_size(&self, size: Integer) -> CallResult<'vm, ()> {
+        assert!(
+            size >= 0,
+            "Class::set_instance_user_data_size: size must be non-negative, got {size}"
+        );
+
+        self.0.push_into_stack();
+        let ret = unsafe { sq_setclassudsize(self.0.sq.vm, -1, size) };
+        self.0.sq.pop(1);
+        if ret.is_error() {
+            Err(CallError::get_runtime_error(self.0.sq))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+pub struct MemberHandle<'vm> {
+    ptr: HSQMEMBERHANDLE,
+    _pd: PhantomData<Class<'vm>>,
 }
