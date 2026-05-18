@@ -51,7 +51,7 @@ pub type CallResult<'vm, T> = std::result::Result<T, CallError<'vm>>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("compile error at {source_name}:{line}:{column}: description")]
+    #[error("compile error at {source_name}:{line}:{column}: {description}")]
     Compile {
         description: std::string::String,
         source_name: std::string::String,
