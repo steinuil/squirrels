@@ -20,11 +20,11 @@ use std::{
 };
 
 use squirrels_sys::{
-    HSQOBJECT, HSQUIRRELVM, SQ_VMSTATE_IDLE, SQ_VMSTATE_RUNNING, SQ_VMSTATE_SUSPENDED, SQFalse,
-    SQFloat, SQInteger, SQTrue, SQUnsignedInteger, SQUserPointer, sq_addref, sq_call, sq_close,
-    sq_compilebuffer, sq_getlasterror, sq_getstackobj, sq_gettop, sq_getuserdata, sq_getvmstate,
-    sq_newclosure, sq_newuserdata, sq_open, sq_pop, sq_push, sq_pushobject, sq_pushroottable,
-    sq_release, sq_resetobject, sq_setreleasehook, sq_settop, sq_throwerror, sq_throwobject,
+    HSQOBJECT, HSQUIRRELVM, SQ_VMSTATE_IDLE, SQ_VMSTATE_RUNNING, SQ_VMSTATE_SUSPENDED, SQFloat,
+    SQInteger, SQTrue, SQUnsignedInteger, SQUserPointer, sq_addref, sq_close, sq_compilebuffer,
+    sq_getlasterror, sq_getstackobj, sq_gettop, sq_getuserdata, sq_getvmstate, sq_newclosure,
+    sq_newuserdata, sq_open, sq_pop, sq_pushobject, sq_pushroottable, sq_release, sq_resetobject,
+    sq_setreleasehook, sq_settop, sq_throwerror, sq_throwobject,
 };
 
 pub use crate::{

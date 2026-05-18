@@ -75,7 +75,7 @@ impl<'vm> NativeClosure<'vm> {
 }
 
 /// Expects the closure and the environment to already be pushed.
-fn call_closure<'vm, A: IntoArgs<'vm>, T: FromSquirrel<'vm>>(
+pub(crate) fn call_closure<'vm, A: IntoArgs<'vm>, T: FromSquirrel<'vm>>(
     obj: &Object<'vm>,
     args: A,
 ) -> CallResult<'vm, T> {
