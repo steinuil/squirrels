@@ -1,9 +1,9 @@
 use std::marker::PhantomData;
 
 use squirrels_sys::{
-    SQFalse, SQTrue, sq_clear, sq_clone, sq_deleteslot, sq_get, sq_getsize, sq_newslot,
-    sq_newtable, sq_newtableex, sq_next, sq_pushnull, sq_rawdeleteslot, sq_rawget, sq_rawset,
-    sq_set, sq_setdelegate, tagSQObjectType_OT_TABLE,
+    SQFalse, SQTrue, sq_clear, sq_clone, sq_deleteslot, sq_get, sq_getdelegate, sq_getsize,
+    sq_newslot, sq_newtable, sq_newtableex, sq_next, sq_pushnull, sq_rawdeleteslot, sq_rawget,
+    sq_rawset, sq_set, sq_setdelegate, tagSQObjectType_OT_TABLE,
 };
 
 use crate::{
@@ -50,11 +50,13 @@ impl<'vm> Table<'vm> {
 
     /// Gets the value associated to `key` from the table.
     ///
-    /// This might invoke the `_get` delegate on the table if `key` is not
-    /// already present in the table.
+    /// This method will trigger the delegate lookup process and may invoke the `_get` metamethod
+    /// on this table's ancestor delegates if `key` is not directly assigned in the table;
+    /// see [`Table::set_delegate`] for details.
     /// Use the [`raw_get`](Self::raw_get) method if that is not desired.
     ///
-    /// Fails if no value is associated to `key`, the `_get` delegate is not present TODO
+    /// Fails if `key` is not found in the table or the delegate lookup process fails or
+    /// throws an error.
     pub fn get<K, V>(&self, key: K) -> CallResult<'vm, V>
     where
         K: IntoSquirrel<'vm>,
@@ -78,10 +80,12 @@ impl<'vm> Table<'vm> {
     ///
     /// Equivalent to `table.key <- value` in Squirrel scripts.
     ///
-    /// Can only fail if `key` is `null`.
+    /// This method will trigger the delegate lookup process and may invoke the `_newslot`
+    /// metamethod on this table's ancestor delegates if `key` is not already present in
+    /// the raw table; see [`Table::set_delegate`] for details.
     ///
-    /// This might invoke the `_newslot` delegate on the table if `key` is not
-    /// already present in the table.
+    /// Can only fail if `key` is `null`, or if the table's `_newslot` metamethod
+    /// raises an error.
     pub fn set<K, V>(&self, key: K, value: V) -> CallResult<'vm, ()>
     where
         K: IntoSquirrel<'vm>,
@@ -107,9 +111,16 @@ impl<'vm> Table<'vm> {
     ///
     /// Equivalent to `table.key = value` in Squirrel scripts.
     ///
+    /// This method will trigger the delegate lookup process and may invoke the `_set`
+    /// metamethod on this table's ancestor delegates if `key` is not directly assigned
+    /// in the table; see [`Table::set_delegate`] for details.
+    /// Use the [`raw_set`](Self::raw_set) method if that is not desired.
+    ///
     /// Fails if:
-    /// * `key` is `null`
-    /// * There is no `key` slot in the table.
+    /// * `key` is `null`.
+    /// * There is no `key` slot in the table or its ancestor delegates, and no `_set`
+    ///   metamethod handled the assignment.
+    /// * The `_set` metamethod raises an error.
     pub fn assign<K, V>(&self, key: K, value: V) -> CallResult<'vm, ()>
     where
         K: IntoSquirrel<'vm>,
@@ -133,9 +144,16 @@ impl<'vm> Table<'vm> {
 
     /// Removes the slot associated with `key` in the table and returns its value.
     ///
+    /// If this table's delegate defines the `_delslot` metamethod, it is invoked
+    /// instead of removing the slot from the table directly, regardless of whether
+    /// `key` is present in the table, and its return value is returned in place of
+    /// the removed value; see [`Table::set_delegate`] for details.
+    /// Use the [`raw_delete`](Self::raw_delete) method if that is not desired.
+    ///
     /// Fails if:
     /// * `key` is `null`.
-    /// * There is no `key` slot in the table.
+    /// * There is no `key` slot in the table and no `_delslot` metamethod is defined.
+    /// * The `_delslot` metamethod raises an error.
     /// * The conversion from `V` fails.
     pub fn delete<K, V>(&self, key: K) -> CallResult<'vm, V>
     where
@@ -168,6 +186,9 @@ impl<'vm> Table<'vm> {
         assert!(!ret.is_error(), "sq_clear failed on {:?}", self);
     }
 
+    /// Gets the value associated to `key` from the table, bypassing the delegate lookup.
+    ///
+    /// Fails if `key` is `null` or no value is associated to `key`.
     pub fn raw_get<K, V>(&self, key: K) -> CallResult<'vm, V>
     where
         K: IntoSquirrel<'vm>,
@@ -187,6 +208,10 @@ impl<'vm> Table<'vm> {
         Ok(val?)
     }
 
+    /// Sets the value associated to an already existing `key` in the table to `value`,
+    /// bypassing delegate lookup.
+    ///
+    /// Fails if `key` is `null` or no value is associated to `key`.
     pub fn raw_set<K, V>(&self, key: K, value: V) -> CallResult<'vm, ()>
     where
         K: IntoSquirrel<'vm>,
@@ -205,6 +230,13 @@ impl<'vm> Table<'vm> {
         Ok(())
     }
 
+    /// Removes the slot associated with `key` in the table and returns its value,
+    /// bypassing the delegate lookup.
+    ///
+    /// Returns `None` both when `key` did not exist in the table, and when
+    /// `key` existed and was associated to `null`.
+    ///
+    /// Fails if the conversion from `V` failed.
     pub fn raw_delete<K, V>(&self, key: K) -> Result<Option<V>>
     where
         K: IntoSquirrel<'vm>,
@@ -221,6 +253,7 @@ impl<'vm> Table<'vm> {
         Ok(val?)
     }
 
+    /// Check whether a slot associated to `key` exists in the table.
     pub fn contains_key<K>(&self, key: K) -> bool
     where
         K: IntoSquirrel<'vm>,
@@ -231,6 +264,7 @@ impl<'vm> Table<'vm> {
         !unsafe { sq_rawget(self.0.sq.vm, -2) }.is_error()
     }
 
+    /// Iterate on the table's key-value pairs.
     pub fn iter<K, V>(&self) -> TableSlots<'vm, K, V> {
         self.0.push_into_stack();
         unsafe { sq_pushnull(self.0.sq.vm) };
@@ -240,6 +274,88 @@ impl<'vm> Table<'vm> {
         }
     }
 
+    /// Sets or clears this table's delegate.
+    ///
+    /// Delegates are parent tables that allow the definition of special behaviors for
+    /// their child.
+    ///
+    /// Fails if assigning this delegate would create a reference cycle.
+    ///
+    /// # Delegate lookup
+    ///
+    /// When a table is indexed with a key that doesn't correspond to one of its slots,
+    /// the interpreter automatically delegates the operation to its parent.
+    ///
+    /// This lookup process may look up the slot associated with the key on its ancestor
+    /// delegates and call metamethods, depending on the method.
+    ///
+    /// This is a simplified model of what the delegate lookup looks like for the
+    /// [`Table::get`] method. Other methods have similar but functionally different
+    /// behavior; refer to [the official squirrel docs][squirrel-metamethods] and the
+    /// documentation on specific `Table` methods for more details.
+    ///
+    /// ```rust
+    /// # use squirrels::{
+    /// #   Squirrel, Table, Value, CallResult,
+    /// #   Integer, Closure, CallError, FromSquirrel, IntoSquirrel,
+    /// # };
+    /// # let sq = Squirrel::new(1024);
+    /// # let table = Table::new(&sq);
+    /// # let delegate1 = Table::new(&sq);
+    /// # let delegate2 = Table::new(&sq);
+    /// # let metamethod: Closure = sq.eval("return function(key) { return 1 }").unwrap();
+    /// # delegate2.set("_get", metamethod).unwrap();
+    /// # delegate1.set_delegate(Some(delegate2)).unwrap();
+    /// # table.set_delegate(Some(delegate1)).unwrap();
+    /// # let key = "key";
+    /// fn lookup<'vm, K, V>(receiver: Table<'vm>, key: K) -> CallResult<'vm, Option<V>>
+    /// where
+    ///     K: IntoSquirrel<'vm> + Clone,
+    ///     V: FromSquirrel<'vm>,
+    /// {
+    ///     // Directly look up the key on the receiver first.
+    ///     if let Ok(value) = receiver.raw_get(key.clone()) {
+    ///         return Ok(Some(value));
+    ///     }
+    ///
+    ///     let Some(delegate) = receiver.get_delegate() else {
+    ///         return Ok(None);
+    ///     };
+    ///
+    ///     // Recursively look up the key on the delegate.
+    ///     if let Some(v) = lookup(delegate.clone(), key.clone())? {
+    ///         return Ok(Some(v));
+    ///     }
+    ///
+    ///     // If lookup on the ancestor delegates failed, invoke the `_get` metamethod
+    ///     // on the delegate with `receiver` as `this`.
+    ///     if let Ok(metamethod) = delegate.raw_get::<_, Closure>("_get") {
+    /// #       // TODO add a metamethod.call_with(this, (key,)) method
+    ///         match metamethod.call((key,)) {
+    ///             // If the metamethod successfully returned a value, return it.
+    ///             Ok(v) => return Ok(Some(v)),
+    ///
+    ///             // If the metamethod threw `null` (sentinel for "key not found"),
+    ///             // continue with the process.
+    ///             Err(CallError::Runtime(Value::Null)) => {}
+    ///
+    ///             // If the metamethod threw an error, bubble it up.
+    ///             Err(e) => return Err(e),
+    ///         }
+    ///     }
+    ///
+    ///     // If the lookup failed on all ancestor delegates, the key is not found.
+    ///     Ok(None)
+    /// }
+    ///
+    /// let v: Integer = table.get(key).unwrap();
+    /// let simulated_lookup: Integer = lookup(table.clone(), key).unwrap().unwrap();
+    ///
+    /// assert_eq!(v, simulated_lookup);
+    /// # assert_eq!(v, 1);
+    /// ```
+    ///
+    /// [squirrel-metamethods]: http://www.squirrel-lang.org/squirreldoc/reference/language/metamethods.html
     pub fn set_delegate(&self, delegate: Option<Table<'vm>>) -> CallResult<'vm, ()> {
         self.0.push_into_stack();
         unsafe { delegate.push_into_stack(self.0.sq) };
@@ -255,9 +371,10 @@ impl<'vm> Table<'vm> {
         Ok(())
     }
 
+    /// Get this table's delegate, if any.
     pub fn get_delegate(&self) -> Option<Table<'vm>> {
         self.0.push_into_stack();
-        let ret = unsafe { sq_setdelegate(self.0.sq.vm, -1) };
+        let ret = unsafe { sq_getdelegate(self.0.sq.vm, -1) };
         assert!(!ret.is_error(), "sq_getdelegate failed on {:?}", self);
 
         let delegate = unsafe { Option::<Table<'_>>::from_stack(-1, self.0.sq) };
@@ -279,17 +396,25 @@ impl<'vm> Table<'vm> {
     }
 
     /// Create a shallow copy of this `Table` object.
-    pub fn clone_value(&self) -> Self {
+    ///
+    /// If this table's delegate defines the `_cloned` metamethod, it is invoked on
+    /// the newly cloned table after it has been created; see [`Table::set_delegate`]
+    /// for details.
+    ///
+    /// Fails if the `_cloned` metamethod raises an error.
+    pub fn clone_value(&self) -> CallResult<'vm, Self> {
         self.0.push_into_stack();
 
         let ret = unsafe { sq_clone(self.0.sq.vm, -1) };
-        assert!(!ret.is_error(), "sq_clone failed on {:?}", self);
+        if ret.is_error() {
+            self.0.sq.pop(1);
+            return Err(CallError::get_runtime_error(self.0.sq));
+        }
 
-        let new_arr = unsafe { Self::from_stack(-1, self.0.sq) }
-            .unwrap_or_else(|_| panic!("sq_clone failed on {:?}", self));
+        let new_table = unsafe { Self::from_stack(-1, self.0.sq) };
         self.0.sq.pop(2);
 
-        new_arr
+        Ok(new_table.expect("expected table after sq_clone"))
     }
 }
 

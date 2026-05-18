@@ -210,11 +210,10 @@ impl<'vm> Array<'vm> {
         let ret = unsafe { sq_clone(self.0.sq.vm, -1) };
         assert!(!ret.is_error(), "sq_clone failed on {:?}", self);
 
-        let new_arr = unsafe { Self::from_stack(-1, self.0.sq) }
-            .unwrap_or_else(|_| panic!("sq_clone failed on {:?}", self));
+        let new_arr = unsafe { Self::from_stack(-1, self.0.sq) };
         self.0.sq.pop(2);
 
-        new_arr
+        new_arr.expect("expected array after sq_clone")
     }
 }
 
