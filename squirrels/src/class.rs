@@ -299,6 +299,14 @@ impl<'vm> Class<'vm> {
         self.0.sq.pop(1);
         Ok(())
     }
+
+    // TODO:
+    // * sq_setattributes
+    // * sq_getattributes
+    // * sq_settypetag
+    // * sq_gettypetag
+    // * sq_setreleasehook
+    // * sq_getreleasehook
 }
 
 pub struct MemberHandle<'vm> {
