@@ -1,13 +1,11 @@
-use std::marker::PhantomData;
-
 use squirrels_sys::{
     HSQMEMBERHANDLE, SQFalse, SQTrue, sq_createinstance, sq_getbase, sq_newclass,
     sq_setclassudsize, tagSQObjectType_OT_CLASS,
 };
 
 use crate::{
-    CallError, CallResult, FromSquirrel, Instance, Integer, IntoArgs, IntoSquirrel, Object,
-    Squirrel, String, closure::call_closure, traits::impl_object_traits,
+    CallResult, FromSquirrel, Instance, Integer, IntoArgs, IntoSquirrel, Object, Squirrel, String,
+    closure::call_closure, errors::SqResultExt as _, traits::impl_object_traits,
 };
 
 /// A ref-counted handle to a Squirrel class.
@@ -19,8 +17,7 @@ impl_object_traits!(Class, tagSQObjectType_OT_CLASS, "class");
 impl<'vm> Class<'vm> {
     /// Creates a new class object.
     pub fn new(sq: &'vm Squirrel) -> Self {
-        let ret = unsafe { sq_newclass(sq.vm, SQFalse as _) };
-        assert!(!ret.is_error(), "sq_newclass failed");
+        unsafe { sq_newclass(sq.vm, SQFalse as _) }.expect(format_args!("sq_newclass failed"));
 
         let k = unsafe { Self::from_stack(-1, sq) };
         sq.pop(1);
@@ -30,10 +27,10 @@ impl<'vm> Class<'vm> {
     /// Creates a new class object that inherits from `base`.
     pub fn with_base(base: Class<'vm>) -> Self {
         let sq = base.0.sq;
-        unsafe { base.push_into_stack(sq) };
+        base.0.push_into_stack();
 
-        let ret = unsafe { sq_newclass(sq.vm, SQTrue as _) };
-        assert!(!ret.is_error(), "sq_newclass failed");
+        unsafe { sq_newclass(sq.vm, SQTrue as _) }
+            .expect(format_args!("sq_newclass failed on {:?}", base));
 
         let k = unsafe { Self::from_stack(-1, sq) };
         sq.pop(2);
@@ -44,8 +41,8 @@ impl<'vm> Class<'vm> {
     pub fn base(&self) -> Option<Class<'vm>> {
         self.0.push_into_stack();
 
-        let ret = unsafe { sq_getbase(self.0.sq.vm, -1) };
-        assert!(!ret.is_error(), "sq_getbase failed on {:?}", self);
+        unsafe { sq_getbase(self.0.sq.vm, -1) }
+            .expect(format_args!("sq_getbase failed on {:?}", self));
 
         let k = unsafe { Option::<Self>::from_stack(-1, self.0.sq) };
         self.0.sq.pop(2);
@@ -59,8 +56,8 @@ impl<'vm> Class<'vm> {
     pub fn raw_instantiate(&self) -> Instance<'vm> {
         self.0.push_into_stack();
 
-        let ret = unsafe { sq_createinstance(self.0.sq.vm, -1) };
-        assert!(!ret.is_error(), "sq_createinstance failed on {:?}", self);
+        unsafe { sq_createinstance(self.0.sq.vm, -1) }
+            .expect(format_args!("sq_createinstance failed on {:?}", self));
 
         let i = unsafe { Instance::from_stack(-1, self.0.sq) };
         self.0.sq.pop(2);
@@ -167,17 +164,13 @@ impl<'vm> Class<'vm> {
         );
 
         self.0.push_into_stack();
-        let ret = unsafe { sq_setclassudsize(self.0.sq.vm, -1, size) };
+        unsafe { sq_setclassudsize(self.0.sq.vm, -1, size) }.to_runtime_error(self.0.sq, 1)?;
         self.0.sq.pop(1);
-        if ret.is_error() {
-            Err(CallError::get_runtime_error(self.0.sq))
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 }
 
 pub struct MemberHandle<'vm> {
     ptr: HSQMEMBERHANDLE,
-    _pd: PhantomData<Class<'vm>>,
+    class: Class<'vm>,
 }

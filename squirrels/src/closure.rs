@@ -3,7 +3,7 @@ use squirrels_sys::{
 };
 
 use crate::{
-    CallError, CallResult, FromSquirrel, IntoArgs, IntoSquirrel, Object, get_runtime_error,
+    CallResult, FromSquirrel, IntoArgs, IntoSquirrel, Object, errors::SqResultExt as _,
     traits::impl_object_traits,
 };
 
@@ -81,12 +81,8 @@ pub(crate) fn call_closure<'vm, A: IntoArgs<'vm>, T: FromSquirrel<'vm>>(
 ) -> CallResult<'vm, T> {
     let arg_count = args.push_args(obj.sq) + 1;
 
-    let ret = unsafe { sq_call(obj.sq.vm, arg_count, SQTrue as _, SQFalse as _) };
-    if ret.is_error() {
-        obj.sq.pop(1);
-
-        return Err(CallError::Runtime(get_runtime_error(obj.sq)));
-    }
+    unsafe { sq_call(obj.sq.vm, arg_count, SQTrue as _, SQFalse as _) }
+        .to_runtime_error(obj.sq, 1)?;
 
     let val = unsafe { T::from_stack(-1, obj.sq) };
     obj.sq.pop(2);
@@ -96,7 +92,7 @@ pub(crate) fn call_closure<'vm, A: IntoArgs<'vm>, T: FromSquirrel<'vm>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Integer, Squirrel, String, Value};
+    use crate::{CallError, Integer, Squirrel, String, Value};
 
     #[test]
     fn closure_call_no_args() {

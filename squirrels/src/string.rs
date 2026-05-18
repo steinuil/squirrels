@@ -2,6 +2,7 @@ use squirrels_sys::{SQChar, sq_getstringandsize, sq_pushstring, tagSQObjectType_
 
 use crate::{
     Error, FromSquirrel, Integer, IntoSquirrel, Object, ObjectType, Result, Squirrel, Value,
+    errors::SqResultExt as _,
 };
 
 /// A ref-counted handle to a Squirrel string.
@@ -32,15 +33,10 @@ impl<'vm> String<'vm> {
 
         let mut ptr: *const SQChar = std::ptr::null();
         let mut len: Integer = 0;
-        let ret = unsafe { sq_getstringandsize(object.sq.vm, -1, &mut ptr, &mut len) };
+        unsafe { sq_getstringandsize(object.sq.vm, -1, &mut ptr, &mut len) }
+            .expect(format_args!("sq_getstringandsized failed on {:?}", object));
 
-        // Pop before we check for an error to avoid leaving the stack in an invalid state.
         object.sq.pop(1);
-
-        assert!(
-            !ret.is_error(),
-            "sq_getstringandsize failed on a verified OT_STRING"
-        );
 
         Ok(Self {
             obj: object,
@@ -167,11 +163,8 @@ impl<'vm> FromSquirrel<'vm> for String<'vm> {
 
         let mut ptr: *const SQChar = std::ptr::null();
         let mut len: Integer = 0;
-        let ret = unsafe { sq_getstringandsize(sq.vm, idx, &mut ptr, &mut len) };
-        assert!(
-            !ret.is_error(),
-            "sq_getstringandsize failed on a verified OT_STRING"
-        );
+        unsafe { sq_getstringandsize(sq.vm, idx, &mut ptr, &mut len) }
+            .expect(format_args!("sq_getstringandsize failed on {:?}", object));
 
         Ok(Self {
             obj: object,

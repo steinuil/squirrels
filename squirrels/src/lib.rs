@@ -2,6 +2,7 @@ mod array;
 mod class;
 mod closure;
 mod compiler_error_handler;
+mod errors;
 mod generator;
 mod instance;
 mod object;
@@ -43,6 +44,7 @@ pub use crate::{
     weak_ref::WeakRef,
 };
 
+use crate::errors::SqResultExt as _;
 pub(crate) use crate::object::{Object, ObjectType};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -122,11 +124,8 @@ impl Squirrel {
         unsafe {
             sq_resetobject(&mut root);
             sq_pushroottable(vm);
-            let ret = sq_getstackobj(vm, -1, &mut root);
-            assert!(
-                !ret.is_error(),
-                "failed to get the root table right after pushing it"
-            );
+            sq_getstackobj(vm, -1, &mut root)
+                .expect(format_args!("expected the root table we just pushed"));
             sq_addref(vm, &mut root);
             sq_pop(vm, 1);
         };

@@ -8,7 +8,7 @@ use squirrels_sys::{
 
 use crate::{
     CallError, CallResult, FromSquirrel, Integer, IntoSquirrel, Object, Result, Squirrel,
-    traits::impl_object_traits,
+    errors::SqResultExt, traits::impl_object_traits,
 };
 
 /// A ref-counted handle to a Squirrel table.
@@ -115,11 +115,7 @@ impl<'vm> Table<'vm> {
         self.0.push_into_stack();
         unsafe { key.push_into_stack(self.0.sq) };
 
-        let ret = unsafe { sq_get(self.0.sq.vm, -2) };
-        if ret.is_error() {
-            self.0.sq.pop(1);
-            return Err(CallError::get_runtime_error(self.0.sq));
-        }
+        unsafe { sq_get(self.0.sq.vm, -2) }.to_runtime_error(self.0.sq, 1)?;
 
         let val = unsafe { V::from_stack(-1, self.0.sq) };
         self.0.sq.pop(2);
@@ -150,13 +146,8 @@ impl<'vm> Table<'vm> {
         unsafe { key.push_into_stack(self.0.sq) };
         unsafe { value.push_into_stack(self.0.sq) };
 
-        let ret = unsafe { sq_newslot(self.0.sq.vm, -3, SQFalse as _) };
-        if ret.is_error() {
-            // sq_newslot only pops k+v on success
-            self.0.sq.pop(3);
-
-            return Err(CallError::get_runtime_error(self.0.sq));
-        }
+        // sq_newslot only pops k+v on success
+        unsafe { sq_newslot(self.0.sq.vm, -3, SQFalse as _) }.to_runtime_error(self.0.sq, 3)?;
 
         self.0.sq.pop(1);
         Ok(())
@@ -194,13 +185,8 @@ impl<'vm> Table<'vm> {
         unsafe { key.push_into_stack(self.0.sq) };
         unsafe { value.push_into_stack(self.0.sq) };
 
-        let ret = unsafe { sq_set(self.0.sq.vm, -3) };
-        if ret.is_error() {
-            // sq_set only pops k+v on success
-            self.0.sq.pop(3);
-
-            return Err(CallError::get_runtime_error(self.0.sq));
-        }
+        // sq_set only pops k+v on success
+        unsafe { sq_set(self.0.sq.vm, -3) }.to_runtime_error(self.0.sq, 3)?;
 
         self.0.sq.pop(1);
         Ok(())
@@ -250,9 +236,8 @@ impl<'vm> Table<'vm> {
     pub fn clear(&self) {
         self.0.push_into_stack();
 
-        let ret = unsafe { sq_clear(self.0.sq.vm, -1) };
+        unsafe { sq_clear(self.0.sq.vm, -1) }.expect(format_args!("sq_clear failed on {:?}", self));
         self.0.sq.pop(1);
-        assert!(!ret.is_error(), "sq_clear failed on {:?}", self);
     }
 
     /// Gets the value associated to `key` from the table, bypassing the delegate lookup.
@@ -266,11 +251,7 @@ impl<'vm> Table<'vm> {
         self.0.push_into_stack();
         unsafe { key.push_into_stack(self.0.sq) };
 
-        let ret = unsafe { sq_rawget(self.0.sq.vm, -2) };
-        if ret.is_error() {
-            self.0.sq.pop(1);
-            return Err(CallError::get_runtime_error(self.0.sq));
-        }
+        unsafe { sq_rawget(self.0.sq.vm, -2) }.to_runtime_error(self.0.sq, 1)?;
 
         let val = unsafe { V::from_stack(-1, self.0.sq) };
         self.0.sq.pop(2);
@@ -290,11 +271,8 @@ impl<'vm> Table<'vm> {
         unsafe { key.push_into_stack(self.0.sq) };
         unsafe { value.push_into_stack(self.0.sq) };
 
-        let ret = unsafe { sq_rawset(self.0.sq.vm, -3) };
+        unsafe { sq_rawset(self.0.sq.vm, -3) }.to_runtime_error(self.0.sq, 1)?;
         self.0.sq.pop(1);
-        if ret.is_error() {
-            return Err(CallError::get_runtime_error(self.0.sq));
-        }
 
         Ok(())
     }
@@ -314,8 +292,8 @@ impl<'vm> Table<'vm> {
         self.0.push_into_stack();
         unsafe { key.push_into_stack(self.0.sq) };
 
-        let ret = unsafe { sq_rawdeleteslot(self.0.sq.vm, -2, SQTrue as _) };
-        assert!(!ret.is_error(), "sq_rawdeleteslot failed for {:?}", self);
+        unsafe { sq_rawdeleteslot(self.0.sq.vm, -2, SQTrue as _) }
+            .expect(format_args!("sq_rawdeleteslot failed on {:?}", self));
 
         let val = unsafe { Option::<V>::from_stack(-1, self.0.sq) };
         self.0.sq.pop(2);
@@ -350,12 +328,8 @@ impl<'vm> Table<'vm> {
         self.0.push_into_stack();
         unsafe { delegate.push_into_stack(self.0.sq) };
 
-        let ret = unsafe { sq_setdelegate(self.0.sq.vm, -2) };
-        if ret.is_error() {
-            // sq_setdelegate does not pop on error
-            self.0.sq.pop(2);
-            return Err(CallError::get_runtime_error(self.0.sq));
-        }
+        // sq_setdelegate does not pop on error
+        unsafe { sq_setdelegate(self.0.sq.vm, -2) }.to_runtime_error(self.0.sq, 2)?;
 
         self.0.sq.pop(1);
         Ok(())
@@ -364,8 +338,8 @@ impl<'vm> Table<'vm> {
     /// Returns this table's delegate or `None` if it doesn't have one.
     pub fn get_delegate(&self) -> Option<Table<'vm>> {
         self.0.push_into_stack();
-        let ret = unsafe { sq_getdelegate(self.0.sq.vm, -1) };
-        assert!(!ret.is_error(), "sq_getdelegate failed on {:?}", self);
+        unsafe { sq_getdelegate(self.0.sq.vm, -1) }
+            .expect(format_args!("sq_getdelegate failed on {:?}", self));
 
         let delegate = unsafe { Option::<Table<'_>>::from_stack(-1, self.0.sq) };
         self.0.sq.pop(2);
@@ -399,11 +373,7 @@ impl<'vm> Table<'vm> {
     pub fn clone_value(&self) -> CallResult<'vm, Self> {
         self.0.push_into_stack();
 
-        let ret = unsafe { sq_clone(self.0.sq.vm, -1) };
-        if ret.is_error() {
-            self.0.sq.pop(1);
-            return Err(CallError::get_runtime_error(self.0.sq));
-        }
+        unsafe { sq_clone(self.0.sq.vm, -1) }.to_runtime_error(self.0.sq, 1)?;
 
         let new_table = unsafe { Self::from_stack(-1, self.0.sq) };
         self.0.sq.pop(2);

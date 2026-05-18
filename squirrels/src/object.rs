@@ -12,7 +12,7 @@ use squirrels_sys::{
 
 use crate::{
     Array, Class, Closure, Generator, Instance, Integer, NativeClosure, Squirrel, String, Table,
-    Thread, UnsignedInteger, UserData, UserPointer, Value, WeakRef,
+    Thread, UnsignedInteger, UserData, UserPointer, Value, WeakRef, errors::SqResultExt,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -51,8 +51,8 @@ impl<'vm> Object<'vm> {
         unsafe { sq_resetobject(&mut obj) };
 
         // Get it from the stack
-        let ret = unsafe { sq_getstackobj(sq.vm, idx, &mut obj) };
-        assert!(!ret.is_error(), "sq_getstackobj failed for idx {idx}");
+        unsafe { sq_getstackobj(sq.vm, idx, &mut obj) }
+            .expect(format_args!("sq_getstackobj failed for valid idx {idx}"));
 
         // Increment the refcount
         unsafe { sq_addref(sq.vm, &mut obj) };

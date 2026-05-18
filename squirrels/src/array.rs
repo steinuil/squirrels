@@ -7,7 +7,7 @@ use squirrels_sys::{
 };
 
 use crate::{
-    CallError, CallResult, FromSquirrel, Integer, IntoSquirrel, Object, Squirrel, Value,
+    CallResult, FromSquirrel, Integer, IntoSquirrel, Object, Squirrel, Value, errors::SqResultExt,
     traits::impl_object_traits,
 };
 
@@ -45,12 +45,7 @@ impl<'vm> Array<'vm> {
         self.0.push_into_stack();
         unsafe { idx.push_into_stack(self.0.sq) };
 
-        let ret = unsafe { sq_get(self.0.sq.vm, -2) };
-        if ret.is_error() {
-            self.0.sq.pop(1);
-
-            return Err(CallError::get_runtime_error(self.0.sq));
-        }
+        unsafe { sq_get(self.0.sq.vm, -2) }.to_runtime_error(self.0.sq, 1)?;
 
         let val = unsafe { T::from_stack(-1, self.0.sq) };
         self.0.sq.pop(2);
@@ -65,12 +60,7 @@ impl<'vm> Array<'vm> {
         unsafe { key.push_into_stack(self.0.sq) };
         unsafe { value.push_into_stack(self.0.sq) };
 
-        let ret = unsafe { sq_set(self.0.sq.vm, -3) };
-        if ret.is_error() {
-            self.0.sq.pop(3);
-
-            return Err(CallError::get_runtime_error(self.0.sq));
-        }
+        unsafe { sq_set(self.0.sq.vm, -3) }.to_runtime_error(self.0.sq, 3)?;
 
         self.0.sq.pop(1);
 
@@ -82,8 +72,8 @@ impl<'vm> Array<'vm> {
         self.0.push_into_stack();
         unsafe { value.push_into_stack(self.0.sq) };
 
-        let ret = unsafe { sq_arrayappend(self.0.sq.vm, -2) };
-        assert!(!ret.is_error(), "sq_arrayappend failed on {:?}", self);
+        unsafe { sq_arrayappend(self.0.sq.vm, -2) }
+            .expect(format_args!("sq_arrayappend failed on {:?}", self));
         self.0.sq.pop(1);
     }
 
@@ -93,12 +83,7 @@ impl<'vm> Array<'vm> {
     pub fn pop<T: FromSquirrel<'vm>>(&self) -> CallResult<'vm, T> {
         self.0.push_into_stack();
 
-        let ret = unsafe { sq_arraypop(self.0.sq.vm, -1, SQTrue as _) };
-        if ret.is_error() {
-            self.0.sq.pop(1);
-
-            return Err(CallError::get_runtime_error(self.0.sq));
-        }
+        unsafe { sq_arraypop(self.0.sq.vm, -1, SQTrue as _) }.to_runtime_error(self.0.sq, 1)?;
 
         let v = unsafe { T::from_stack(-1, self.0.sq) };
         self.0.sq.pop(2);
@@ -122,12 +107,7 @@ impl<'vm> Array<'vm> {
         self.0.push_into_stack();
         unsafe { value.push_into_stack(self.0.sq) };
 
-        let ret = unsafe { sq_arrayinsert(self.0.sq.vm, -2, idx) };
-        if ret.is_error() {
-            self.0.sq.pop(2);
-
-            return Err(CallError::get_runtime_error(self.0.sq));
-        }
+        unsafe { sq_arrayinsert(self.0.sq.vm, -2, idx) }.to_runtime_error(self.0.sq, 2)?;
         self.0.sq.pop(1);
 
         Ok(())
@@ -140,11 +120,8 @@ impl<'vm> Array<'vm> {
     pub fn remove(&self, idx: Integer) -> CallResult<'vm, ()> {
         self.0.push_into_stack();
 
-        let ret = unsafe { sq_arrayremove(self.0.sq.vm, -1, idx) };
+        unsafe { sq_arrayremove(self.0.sq.vm, -1, idx) }.to_runtime_error(self.0.sq, 1)?;
         self.0.sq.pop(1);
-        if ret.is_error() {
-            return Err(CallError::get_runtime_error(self.0.sq));
-        }
 
         Ok(())
     }
@@ -153,18 +130,17 @@ impl<'vm> Array<'vm> {
     pub fn reverse(&self) {
         self.0.push_into_stack();
 
-        let ret = unsafe { sq_arrayreverse(self.0.sq.vm, -1) };
+        unsafe { sq_arrayreverse(self.0.sq.vm, -1) }
+            .expect(format_args!("sq_arrayreverse failed on {:?}", self));
         self.0.sq.pop(1);
-        assert!(!ret.is_error(), "sq_arrayreverse failed on {:?}", self);
     }
 
     /// Clears all items from the array.
     pub fn clear(&self) {
         self.0.push_into_stack();
 
-        let ret = unsafe { sq_clear(self.0.sq.vm, -1) };
+        unsafe { sq_clear(self.0.sq.vm, -1) }.expect(format_args!("sq_clear failed on {:?}", self));
         self.0.sq.pop(1);
-        assert!(!ret.is_error(), "sq_clear failed on {:?}", self);
     }
 
     /// Grows or shrinks the array to the `new_size`.
@@ -176,11 +152,8 @@ impl<'vm> Array<'vm> {
     pub fn resize(&self, new_size: Integer) -> CallResult<'vm, ()> {
         self.0.push_into_stack();
 
-        let ret = unsafe { sq_arrayresize(self.0.sq.vm, -1, new_size) };
+        unsafe { sq_arrayresize(self.0.sq.vm, -1, new_size) }.to_runtime_error(self.0.sq, 1)?;
         self.0.sq.pop(1);
-        if ret.is_error() {
-            return Err(CallError::get_runtime_error(self.0.sq));
-        }
 
         Ok(())
     }
@@ -207,8 +180,7 @@ impl<'vm> Array<'vm> {
     pub fn clone_value(&self) -> Array<'vm> {
         self.0.push_into_stack();
 
-        let ret = unsafe { sq_clone(self.0.sq.vm, -1) };
-        assert!(!ret.is_error(), "sq_clone failed on {:?}", self);
+        unsafe { sq_clone(self.0.sq.vm, -1) }.expect(format_args!("sq_clone failed on {:?}", self));
 
         let new_arr = unsafe { Self::from_stack(-1, self.0.sq) };
         self.0.sq.pop(2);
