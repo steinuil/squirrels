@@ -3,21 +3,43 @@ use squirrels_sys::{
 };
 
 use crate::{
-    CallError, CallResult, FromSquirrel, IntoArgs, Object, get_runtime_error,
+    CallError, CallResult, FromSquirrel, IntoArgs, IntoSquirrel, Object, get_runtime_error,
     traits::impl_object_traits,
 };
 
+/// A ref-counted handle to a Squirrel function.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Closure<'vm>(pub(crate) Object<'vm>);
 
 impl_object_traits!(Closure, tagSQObjectType_OT_CLOSURE, "closure");
 
 impl<'vm> Closure<'vm> {
-    pub fn call<A: IntoArgs<'vm>, T: FromSquirrel<'vm>>(&self, args: A) -> CallResult<'vm, T> {
+    /// Calls the function with the global environment bound as `this`.
+    pub fn call<Args, T>(&self, args: Args) -> CallResult<'vm, T>
+    where
+        Args: IntoArgs<'vm>,
+        T: FromSquirrel<'vm>,
+    {
+        self.0.push_into_stack();
+        self.0.sq.push_root_table();
+        call_closure(&self.0, args)
+    }
+
+    /// Calls the function with the given `Env` value bound as `this`.
+    pub fn call_with<Env, Args, T>(&self, this: Env, args: Args) -> CallResult<'vm, T>
+    where
+        Env: IntoSquirrel<'vm>,
+        Args: IntoArgs<'vm>,
+        T: FromSquirrel<'vm>,
+    {
+        self.0.push_into_stack();
+        unsafe { this.push_into_stack(self.0.sq) };
         call_closure(&self.0, args)
     }
 }
 
+/// A ref-counted handle to a native function defined using
+/// [`Squirrel::create_function`](crate::Squirrel::create_function).
 #[derive(Debug, Clone, PartialEq)]
 pub struct NativeClosure<'vm>(pub(crate) Object<'vm>);
 
@@ -28,17 +50,35 @@ impl_object_traits!(
 );
 
 impl<'vm> NativeClosure<'vm> {
-    pub fn call<A: IntoArgs<'vm>, T: FromSquirrel<'vm>>(&self, args: A) -> CallResult<'vm, T> {
+    /// Calls the native function with the global environment bound as `this`.
+    pub fn call<Args, T>(&self, args: Args) -> CallResult<'vm, T>
+    where
+        Args: IntoArgs<'vm>,
+        T: FromSquirrel<'vm>,
+    {
+        self.0.push_into_stack();
+        self.0.sq.push_root_table();
+        call_closure(&self.0, args)
+    }
+
+    /// Calls the native function with the given `Env` value bound `this`.
+    pub fn call_with<Env, Args, T>(&self, this: Env, args: Args) -> CallResult<'vm, T>
+    where
+        Env: IntoSquirrel<'vm>,
+        Args: IntoArgs<'vm>,
+        T: FromSquirrel<'vm>,
+    {
+        self.0.push_into_stack();
+        unsafe { this.push_into_stack(self.0.sq) };
         call_closure(&self.0, args)
     }
 }
 
+/// Expects the closure and the environment to already be pushed.
 fn call_closure<'vm, A: IntoArgs<'vm>, T: FromSquirrel<'vm>>(
     obj: &Object<'vm>,
     args: A,
 ) -> CallResult<'vm, T> {
-    obj.push_into_stack();
-    obj.sq.push_root_table();
     let arg_count = args.push_args(obj.sq) + 1;
 
     let ret = unsafe { sq_call(obj.sq.vm, arg_count, SQTrue as _, SQFalse as _) };

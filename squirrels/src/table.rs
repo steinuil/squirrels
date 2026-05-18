@@ -412,6 +412,7 @@ impl<'vm> Table<'vm> {
     }
 }
 
+/// An iterator over the slots of a [`Table`].
 pub struct TableSlots<'vm, K, V> {
     sq: &'vm Squirrel,
     _kv: PhantomData<(K, V)>,
