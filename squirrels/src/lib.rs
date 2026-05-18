@@ -177,13 +177,6 @@ impl Drop for Squirrel {
     }
 }
 
-pub(crate) fn get_runtime_error(sq: &Squirrel) -> Value<'_> {
-    unsafe { sq_getlasterror(sq.vm) };
-    let err = Object::from_stack(-1, sq);
-    sq.pop(1);
-    err.into_value()
-}
-
 extern "C" fn closure_release_hook<F>(payload: SQUserPointer, _size: SQInteger) -> SQInteger {
     let raw_f: *mut F = unsafe { *(payload as *mut *mut F) };
     let _ = catch_unwind(AssertUnwindSafe(|| {

@@ -1,11 +1,12 @@
 use squirrels_sys::{
-    HSQMEMBERHANDLE, SQFalse, SQTrue, sq_createinstance, sq_getbase, sq_newclass,
+    HSQMEMBERHANDLE, SQFalse, SQTrue, sq_createinstance, sq_get, sq_getbase, sq_getmemberhandle,
+    sq_newclass, sq_newmember, sq_newslot, sq_rawget, sq_rawnewmember, sq_rawset, sq_set,
     sq_setclassudsize, tagSQObjectType_OT_CLASS,
 };
 
 use crate::{
-    CallResult, FromSquirrel, Instance, Integer, IntoArgs, IntoSquirrel, Object, Squirrel, String,
-    closure::call_closure, errors::SqResultExt as _, traits::impl_object_traits,
+    CallError, CallResult, FromSquirrel, Instance, Integer, IntoArgs, IntoSquirrel, Object,
+    Squirrel, String, closure::call_closure, errors::SqResultExt as _, traits::impl_object_traits,
 };
 
 /// A ref-counted handle to a Squirrel class.
@@ -80,6 +81,11 @@ impl<'vm> Class<'vm> {
         call_closure(&self.0, args)
     }
 
+    /// Creates a new member on this class with `key`, `value`, and `attr`.
+    ///
+    /// If `is_static` is `true`, the member is created as a static member.
+    ///
+    /// Fails if `key` is `null` or already exists on the class.
     pub fn new_member<K, V, A>(
         &self,
         key: K,
@@ -92,9 +98,36 @@ impl<'vm> Class<'vm> {
         V: IntoSquirrel<'vm>,
         A: IntoSquirrel<'vm>,
     {
-        todo!()
+        let prev_top = self.0.sq.stack_depth();
+        self.0.push_into_stack();
+        unsafe { key.push_into_stack(self.0.sq) };
+        unsafe { value.push_into_stack(self.0.sq) };
+        unsafe { attr.push_into_stack(self.0.sq) };
+
+        let ret = unsafe {
+            sq_newmember(
+                self.0.sq.vm,
+                -4,
+                if is_static { SQTrue } else { SQFalse } as _,
+            )
+        };
+        if ret.is_error() {
+            // sq_newmember leaves the stack in an inconsistent state depending
+            // on the error path it took.
+            self.0.sq.resize_stack(prev_top);
+            return Err(CallError::get_runtime_error(self.0.sq));
+        }
+
+        self.0.sq.pop(1);
+        Ok(())
     }
 
+    /// Creates a new member on this class with `key`, `value`, and `attr`,
+    /// bypassing the `_newmember` metamethod.
+    ///
+    /// If `is_static` is `true`, the member is created as a static member.
+    ///
+    /// Fails if `key` is `null` or already exists on the class.
     pub fn raw_new_member<K, V, A>(
         &self,
         key: K,
@@ -107,49 +140,147 @@ impl<'vm> Class<'vm> {
         V: IntoSquirrel<'vm>,
         A: IntoSquirrel<'vm>,
     {
-        todo!()
+        let prev_top = self.0.sq.stack_depth();
+        self.0.push_into_stack();
+        unsafe { key.push_into_stack(self.0.sq) };
+        unsafe { value.push_into_stack(self.0.sq) };
+        unsafe { attr.push_into_stack(self.0.sq) };
+
+        let ret = unsafe {
+            sq_rawnewmember(
+                self.0.sq.vm,
+                -4,
+                if is_static { SQTrue } else { SQFalse } as _,
+            )
+        };
+        if ret.is_error() {
+            self.0.sq.resize_stack(prev_top);
+            return Err(CallError::get_runtime_error(self.0.sq));
+        }
+
+        self.0.sq.pop(1);
+        Ok(())
     }
 
+    /// Creates or overwrites a slot on this class with `key` and `value`.
+    ///
+    /// If `is_static` is `true`, the slot is created as a static member.
+    ///
+    /// Fails if `key` is `null`.
     pub fn new_slot<K, V>(&self, key: K, value: V, is_static: bool) -> CallResult<'vm, ()>
     where
         K: IntoSquirrel<'vm>,
         V: IntoSquirrel<'vm>,
     {
-        todo!()
+        self.0.push_into_stack();
+        unsafe { key.push_into_stack(self.0.sq) };
+        unsafe { value.push_into_stack(self.0.sq) };
+
+        // sq_newslot only pops k+v on success
+        unsafe {
+            sq_newslot(
+                self.0.sq.vm,
+                -3,
+                if is_static { SQTrue } else { SQFalse } as _,
+            )
+        }
+        .to_runtime_error(self.0.sq, 3)?;
+
+        self.0.sq.pop(1);
+        Ok(())
     }
 
+    /// Gets the value associated to `key` on this class.
+    ///
+    /// Fails if `key` is not found.
     pub fn get<K, V>(&self, key: K) -> CallResult<'vm, V>
     where
         K: IntoSquirrel<'vm>,
         V: FromSquirrel<'vm>,
     {
-        todo!()
+        self.0.push_into_stack();
+        unsafe { key.push_into_stack(self.0.sq) };
+
+        unsafe { sq_get(self.0.sq.vm, -2) }.to_runtime_error(self.0.sq, 1)?;
+
+        let val = unsafe { V::from_stack(-1, self.0.sq) };
+        self.0.sq.pop(2);
+        Ok(val?)
     }
+
+    /// Sets the value associated to an already existing `key` on this class.
+    ///
+    /// Fails if `key` is `null` or not found.
     pub fn set<K, V>(&self, key: K, value: V) -> CallResult<'vm, ()>
     where
         K: IntoSquirrel<'vm>,
         V: IntoSquirrel<'vm>,
     {
-        todo!()
+        self.0.push_into_stack();
+        unsafe { key.push_into_stack(self.0.sq) };
+        unsafe { value.push_into_stack(self.0.sq) };
+
+        // sq_set only pops k+v on success
+        unsafe { sq_set(self.0.sq.vm, -3) }.to_runtime_error(self.0.sq, 3)?;
+
+        self.0.sq.pop(1);
+        Ok(())
     }
+
+    /// Gets the value associated to `key` on this class, bypassing metamethods.
+    ///
+    /// Fails if `key` is `null` or not found.
     pub fn raw_get<K, V>(&self, key: K) -> CallResult<'vm, V>
     where
         K: IntoSquirrel<'vm>,
         V: FromSquirrel<'vm>,
     {
-        todo!()
+        self.0.push_into_stack();
+        unsafe { key.push_into_stack(self.0.sq) };
+
+        unsafe { sq_rawget(self.0.sq.vm, -2) }.to_runtime_error(self.0.sq, 1)?;
+
+        let val = unsafe { V::from_stack(-1, self.0.sq) };
+        self.0.sq.pop(2);
+        Ok(val?)
     }
 
+    /// Sets the value associated to an already existing `key` on this class,
+    /// bypassing metamethods.
+    ///
+    /// Fails if `key` is `null`.
     pub fn raw_set<K, V>(&self, key: K, value: V) -> CallResult<'vm, ()>
     where
         K: IntoSquirrel<'vm>,
         V: IntoSquirrel<'vm>,
     {
-        todo!()
+        self.0.push_into_stack();
+        unsafe { key.push_into_stack(self.0.sq) };
+        unsafe { value.push_into_stack(self.0.sq) };
+
+        unsafe { sq_rawset(self.0.sq.vm, -3) }.to_runtime_error(self.0.sq, 1)?;
+        self.0.sq.pop(1);
+        Ok(())
     }
 
+    /// Returns a [`MemberHandle`] for the member of this class named `name`.
+    ///
+    /// Fails if no member named `name` exists on this class.
     pub fn member_handle(&self, name: String<'vm>) -> CallResult<'vm, MemberHandle<'vm>> {
-        todo!()
+        self.0.push_into_stack();
+        unsafe { name.push_into_stack(self.0.sq) };
+
+        let mut handle: HSQMEMBERHANDLE = unsafe { std::mem::zeroed() };
+        // sq_getmemberhandle pops the key on success, leaves the stack
+        // untouched on error.
+        unsafe { sq_getmemberhandle(self.0.sq.vm, -2, &mut handle) }
+            .to_runtime_error(self.0.sq, 2)?;
+
+        self.0.sq.pop(1);
+        Ok(MemberHandle {
+            ptr: handle,
+            class: self.clone(),
+        })
     }
 
     /// Sets the user data size of a class.
