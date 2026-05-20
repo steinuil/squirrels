@@ -1,8 +1,8 @@
 use std::ffi::c_void;
 
 use squirrels_sys::{
-    HSQOBJECT, sq_addref, sq_getrefcount, sq_getstackobj, sq_pushobject, sq_release,
-    sq_resetobject, tagSQObjectType_OT_ARRAY, tagSQObjectType_OT_BOOL, tagSQObjectType_OT_CLASS,
+    HSQOBJECT, sq_addref, sq_getstackobj, sq_pushobject, sq_release, sq_resetobject,
+    tagSQObjectType_OT_ARRAY, tagSQObjectType_OT_BOOL, tagSQObjectType_OT_CLASS,
     tagSQObjectType_OT_CLOSURE, tagSQObjectType_OT_FLOAT, tagSQObjectType_OT_GENERATOR,
     tagSQObjectType_OT_INSTANCE, tagSQObjectType_OT_INTEGER, tagSQObjectType_OT_NATIVECLOSURE,
     tagSQObjectType_OT_NULL, tagSQObjectType_OT_STRING, tagSQObjectType_OT_TABLE,
@@ -12,7 +12,7 @@ use squirrels_sys::{
 
 use crate::{
     Array, Class, Closure, Generator, Instance, Integer, NativeClosure, Squirrel, String, Table,
-    Thread, UnsignedInteger, UserData, UserPointer, Value, WeakRef, errors::SqResultExt,
+    Thread, UserData, UserPointer, Value, WeakRef, errors::SqResultExt,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -90,10 +90,10 @@ impl<'vm> Object<'vm> {
     }
 
     /// Gets the number of references to this object.
-    pub fn ref_count(&self) -> UnsignedInteger {
-        let mut obj = self.obj;
-        unsafe { sq_getrefcount(self.sq.vm, &mut obj) }
-    }
+    // pub fn ref_count(&self) -> UnsignedInteger {
+    //     let mut obj = self.obj;
+    //     unsafe { sq_getrefcount(self.sq.vm, &mut obj) }
+    // }
 
     /// Converts this object into a [`Value`].
     pub fn into_value(self) -> Value<'vm> {

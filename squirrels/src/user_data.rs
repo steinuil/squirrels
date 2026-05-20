@@ -77,7 +77,7 @@ impl<'vm> UserData<'vm> {
     ) -> Option<&Payload<T>> {
         let mut buf: SQUserPointer = std::ptr::null_mut();
         let mut tag: SQUserPointer = std::ptr::null_mut();
-        if unsafe { sq_getuserdata(sq.vm, -1, &mut buf, &mut tag) }.is_error() {
+        if unsafe { sq_getuserdata(sq.vm, idx, &mut buf, &mut tag) }.is_error() {
             return None;
         }
 
