@@ -383,6 +383,20 @@ mod tests {
     }
 
     #[test]
+    fn array_into_iter() {
+        let sq = Squirrel::new(1024);
+        let arr: Array<'_> = sq.eval("return [1, 2, 3]").unwrap();
+        let vals = arr
+            .into_iter()
+            .collect::<CallResult<'_, Vec<Value<'_>>>>()
+            .unwrap();
+        assert_eq!(
+            &vals,
+            &[Value::Integer(1), Value::Integer(2), Value::Integer(3)]
+        );
+    }
+
+    #[test]
     fn array_clone_value() {
         let sq = Squirrel::new(1024);
         let arr1: Array<'_> = sq.eval("return [1, 2, 3]").unwrap();

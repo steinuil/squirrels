@@ -2,6 +2,10 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs";
     flake-utils.url = "github:numtide/flake-utils";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -9,23 +13,30 @@
       self,
       nixpkgs,
       flake-utils,
+      rust-overlay,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
       let
-        pkgs = import nixpkgs { inherit system; };
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [ rust-overlay.overlays.default ];
+        };
+
+        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+          extensions = [
+            "llvm-tools-preview"
+            "rust-src"
+            "rust-analyzer"
+          ];
+        };
       in
       {
         devShell = pkgs.mkShell {
           buildInputs = with pkgs; [
-            rustc
-            cargo
-
-            rust-analyzer
-            clippy
+            rustToolchain
             lldb
-            rustfmt
-
+            cargo-llvm-cov
             ast-grep
           ];
 
