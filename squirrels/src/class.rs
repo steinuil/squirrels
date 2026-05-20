@@ -26,7 +26,7 @@ impl<'vm> Class<'vm> {
     }
 
     /// Creates a new class object that inherits from `base`.
-    pub fn with_base(base: Class<'vm>) -> Self {
+    pub fn with_base(base: &Class<'vm>) -> Self {
         let sq = base.0.sq;
         base.0.push_into_stack();
 
@@ -34,7 +34,7 @@ impl<'vm> Class<'vm> {
             .expect(format_args!("sq_newclass failed on {:?}", base));
 
         let k = unsafe { Self::from_stack(-1, sq) };
-        sq.pop(2);
+        sq.pop(1);
         k.expect("expecting the class we just pushed")
     }
 
@@ -312,4 +312,41 @@ impl<'vm> Class<'vm> {
 pub struct MemberHandle<'vm> {
     ptr: HSQMEMBERHANDLE,
     class: Class<'vm>,
+}
+
+#[test]
+fn class_new() {
+    let sq = Squirrel::new(1024);
+    Class::new(&sq);
+    assert_eq!(sq.stack_depth(), 0);
+}
+
+#[test]
+fn class_with_base() {
+    let sq = Squirrel::new(1024);
+    let base = Class::new(&sq);
+    let class = Class::with_base(&base);
+
+    assert_eq!(base, class.base().unwrap());
+    assert_eq!(sq.stack_depth(), 0);
+}
+
+#[test]
+fn class_instantiate() {
+    let sq = Squirrel::new(1024);
+    let class = Class::new(&sq);
+    let instance = class.instantiate(()).unwrap();
+
+    assert!(instance.instance_of(&class));
+    assert_eq!(sq.stack_depth(), 0);
+}
+
+#[test]
+fn class_raw_instantiate() {
+    let sq = Squirrel::new(1024);
+    let class = Class::new(&sq);
+    let instance = class.raw_instantiate();
+
+    assert!(instance.instance_of(&class));
+    assert_eq!(sq.stack_depth(), 0);
 }

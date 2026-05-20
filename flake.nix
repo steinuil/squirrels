@@ -37,6 +37,7 @@
             rustToolchain
             lldb
             cargo-llvm-cov
+            cargo-watch
             ast-grep
           ];
 

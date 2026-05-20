@@ -100,6 +100,7 @@ mod tests {
         let f: Closure = sq.eval("return function() { return 123 }").unwrap();
         let val: Integer = f.call(()).unwrap();
         assert_eq!(val, 123);
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
@@ -108,6 +109,7 @@ mod tests {
         let f: Closure = sq.eval("return function(n) { return n + 1 }").unwrap();
         let val: Integer = f.call((9000,)).unwrap();
         assert_eq!(val, 9001);
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
@@ -116,6 +118,7 @@ mod tests {
         let f: Closure = sq.eval("return function(n, m) { return n + m }").unwrap();
         let val: Integer = f.call((3, 4)).unwrap();
         assert_eq!(val, 7);
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
@@ -126,6 +129,7 @@ mod tests {
             .unwrap();
         let val: String = f.call(("count: ", 9001)).unwrap();
         assert_eq!(val.to_str().unwrap(), "count: 9001");
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
@@ -134,6 +138,7 @@ mod tests {
         let f: Closure = sq.eval("return function(x) { throw \"error\" }").unwrap();
         let err = f.call::<_, ()>((1,)).unwrap_err();
         assert!(matches!(err, CallError::Runtime(Value::String(_))));
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
@@ -143,6 +148,7 @@ mod tests {
         let _: Integer = sq.eval("return 0").unwrap();
         let val: Integer = f.call((10,)).unwrap();
         assert_eq!(val, 11);
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
@@ -150,6 +156,15 @@ mod tests {
         let sq = Squirrel::new(1024);
         let f: Closure = sq.eval("return function(x) { return x + 1 }").unwrap();
         let _: Integer = f.call((10,)).unwrap();
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn closure_call_with() {
+        let sq = Squirrel::new(1024);
+        let f: Closure = sq.eval("return function() { return this + 1 }").unwrap();
+        let v: Integer = f.call_with(5, ()).unwrap();
+        assert_eq!(v, 6);
         assert_eq!(sq.stack_depth(), 0);
     }
 }

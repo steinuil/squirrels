@@ -1,13 +1,13 @@
 use std::ffi::c_void;
 
 use squirrels_sys::{
-    HSQOBJECT, sq_addref, sq_getstackobj, sq_pushobject, sq_release, sq_resetobject,
-    tagSQObjectType_OT_ARRAY, tagSQObjectType_OT_BOOL, tagSQObjectType_OT_CLASS,
-    tagSQObjectType_OT_CLOSURE, tagSQObjectType_OT_FLOAT, tagSQObjectType_OT_GENERATOR,
-    tagSQObjectType_OT_INSTANCE, tagSQObjectType_OT_INTEGER, tagSQObjectType_OT_NATIVECLOSURE,
-    tagSQObjectType_OT_NULL, tagSQObjectType_OT_STRING, tagSQObjectType_OT_TABLE,
-    tagSQObjectType_OT_THREAD, tagSQObjectType_OT_USERDATA, tagSQObjectType_OT_USERPOINTER,
-    tagSQObjectType_OT_WEAKREF,
+    HSQOBJECT, SQUnsignedInteger, sq_addref, sq_getrefcount, sq_getstackobj, sq_pushobject,
+    sq_release, sq_resetobject, tagSQObjectType_OT_ARRAY, tagSQObjectType_OT_BOOL,
+    tagSQObjectType_OT_CLASS, tagSQObjectType_OT_CLOSURE, tagSQObjectType_OT_FLOAT,
+    tagSQObjectType_OT_GENERATOR, tagSQObjectType_OT_INSTANCE, tagSQObjectType_OT_INTEGER,
+    tagSQObjectType_OT_NATIVECLOSURE, tagSQObjectType_OT_NULL, tagSQObjectType_OT_STRING,
+    tagSQObjectType_OT_TABLE, tagSQObjectType_OT_THREAD, tagSQObjectType_OT_USERDATA,
+    tagSQObjectType_OT_USERPOINTER, tagSQObjectType_OT_WEAKREF,
 };
 
 use crate::{
@@ -90,10 +90,11 @@ impl<'vm> Object<'vm> {
     }
 
     /// Gets the number of references to this object.
-    // pub fn ref_count(&self) -> UnsignedInteger {
-    //     let mut obj = self.obj;
-    //     unsafe { sq_getrefcount(self.sq.vm, &mut obj) }
-    // }
+    #[cfg(test)]
+    pub fn ref_count(&self) -> SQUnsignedInteger {
+        let mut obj = self.obj;
+        unsafe { sq_getrefcount(self.sq.vm, &mut obj) }
+    }
 
     /// Converts this object into a [`Value`].
     pub fn into_value(self) -> Value<'vm> {

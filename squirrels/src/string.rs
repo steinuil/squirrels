@@ -205,25 +205,67 @@ impl IntoSquirrel<'_> for &[u8] {
 }
 
 #[test]
-fn test_string_from_stack() {
+fn string_from_stack() {
     let sq = Squirrel::new(1024);
     let str: String = sq.eval("return \"test\"").unwrap();
     assert_eq!(str.to_str().unwrap(), "test");
+    assert_eq!(sq.stack_depth(), 0);
 }
 
 #[test]
-fn test_value_from_object() {
+fn value_from_object() {
     use crate::Value;
 
     let sq = Squirrel::new(1024);
     let v: Value = sq.eval("return 123").unwrap();
     assert_eq!(v, Value::Integer(123));
+    assert_eq!(sq.stack_depth(), 0);
 }
 
 #[test]
-fn test_string_equality() {
+fn string_equality() {
     let sq = Squirrel::new(1024);
     let s1: String = sq.eval("return \"test\"").unwrap();
     let s2: String = sq.eval("return \"test\"").unwrap();
     assert_eq!(s1, s2);
+    assert_eq!(sq.stack_depth(), 0);
+}
+
+#[test]
+fn string_new() {
+    let sq = Squirrel::new(1024);
+    let s = String::new(&sq, "abc");
+    assert_eq!(s.to_str().unwrap(), "abc");
+    assert_eq!(sq.stack_depth(), 0);
+}
+
+#[test]
+fn string_clone() {
+    let sq = Squirrel::new(1024);
+    let s = String::new(&sq, "cloned");
+    let s2 = s.clone();
+
+    assert_eq!(s, s2);
+    assert_eq!(s.obj.ref_count(), 2);
+    assert_eq!(sq.stack_depth(), 0);
+}
+
+#[test]
+fn string_len() {
+    let sq = Squirrel::new(1024);
+    let s = String::new(&sq, "not a long string");
+
+    assert_eq!(s.len(), 17);
+    assert!(!s.is_empty());
+    assert_eq!(sq.stack_depth(), 0);
+}
+
+#[test]
+fn string_cmp() {
+    let sq = Squirrel::new(1024);
+    let s = String::new(&sq, "a");
+
+    assert!(s < "b");
+    assert!(s < String::new(&sq, "b"));
+    assert_eq!(sq.stack_depth(), 0);
 }

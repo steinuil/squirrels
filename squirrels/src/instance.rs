@@ -3,8 +3,8 @@ use squirrels_sys::{
 };
 
 use crate::{
-    CallError, CallResult, Class, Error, FromSquirrel, IntoArgs, IntoSquirrel, Object, Value,
-    errors::SqResultExt as _, traits::impl_object_traits,
+    CallError, CallResult, Class, Error, FromSquirrel, IntoArgs, IntoSquirrel, Object, Squirrel,
+    Value, errors::SqResultExt as _, traits::impl_object_traits,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -29,7 +29,7 @@ impl<'vm> Instance<'vm> {
     }
 
     /// Returns `true` if this instance is an instance of `class`.
-    pub fn instance_of(&self, class: Class<'vm>) -> bool {
+    pub fn instance_of(&self, class: &Class<'vm>) -> bool {
         self.0.sq.assert_same_vm(class.0.sq);
 
         self.0.push_into_stack();
@@ -140,4 +140,24 @@ impl<'vm> Instance<'vm> {
     // * sq_setbyhandle
     // * sq_setreleasehook
     // * sq_getreleasehook
+}
+
+#[test]
+fn instance_class() {
+    let sq = Squirrel::new(1024);
+    let class = Class::new(&sq);
+    let instance = class.raw_instantiate();
+
+    assert_eq!(instance.class(), class);
+    assert_eq!(sq.stack_depth(), 0);
+}
+
+#[test]
+fn instance_instance_of() {
+    let sq = Squirrel::new(1024);
+    let class = Class::new(&sq);
+    let instance = class.raw_instantiate();
+
+    assert!(instance.instance_of(&class));
+    assert_eq!(sq.stack_depth(), 0);
 }

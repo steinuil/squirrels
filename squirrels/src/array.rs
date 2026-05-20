@@ -440,4 +440,16 @@ mod tests {
         assert_eq!(arr2.len(), 3);
         assert_eq!(sq.stack_depth(), 0);
     }
+
+    #[test]
+    fn array_clone() {
+        let sq = Squirrel::new(1024);
+        let arr = Array::new(&sq, 0);
+        let arr_clone = arr.clone();
+
+        arr.clear();
+        assert_eq!(arr_clone.len(), 0);
+        assert_eq!(arr.0.ref_count(), 2);
+        assert_eq!(sq.stack_depth(), 0);
+    }
 }
