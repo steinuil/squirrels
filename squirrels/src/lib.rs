@@ -177,12 +177,8 @@ impl Drop for Squirrel {
     }
 }
 
-extern "C" fn closure_release_hook<F>(payload: SQUserPointer, _size: SQInteger) -> SQInteger {
-    let raw_f: *mut F = unsafe { *(payload as *mut *mut F) };
-    let _ = catch_unwind(AssertUnwindSafe(|| {
-        drop(unsafe { Box::from_raw(raw_f) });
-    }));
-    1
+fn throw_error(v: HSQUIRRELVM, message: &CStr) -> Integer {
+    unsafe { sq_throwerror(v, message.as_ptr()) }.0
 }
 
 extern "C" fn closure_trampoline<'vm, F, A, R>(v: HSQUIRRELVM) -> SQInteger
@@ -194,23 +190,27 @@ where
     let result = catch_unwind(AssertUnwindSafe(|| {
         let top = unsafe { sq_gettop(v) };
 
-        let mut user_data: SQUserPointer = std::ptr::null_mut();
-        let ret = unsafe { sq_getuserdata(v, top, &mut user_data, std::ptr::null_mut()) };
-        if ret.is_error() {
-            let msg = c"expected userdata on the top of the stack";
-            return unsafe { sq_throwerror(v, msg.as_ptr()) }.0;
-        }
-        let f: &F = unsafe { &*(*(user_data as *const *const F)) };
-
         let sq = unsafe { Squirrel::from_raw_borrowed(v) };
         let sq: &'vm Squirrel = unsafe { std::mem::transmute::<&Squirrel, &'vm Squirrel>(&*sq) };
+
+        let payload = match unsafe { UserData::payload_from_stack::<F>(sq, top) } {
+            Some(p) => p,
+            None => return throw_error(v, c"expected typed userdata value"),
+        };
+
+        let f = match payload.cell().try_borrow() {
+            Ok(b) => b,
+            Err(_) => {
+                return throw_error(v, c"nativeclosure upvalue is already mutably borrowed");
+            }
+        };
 
         let args = match A::from_args(top - 2, sq) {
             Ok(a) => a,
             Err(e) => {
                 let msg = CString::new(e.to_string())
                     .unwrap_or_else(|_| c"native function arg extraction failed".to_owned());
-                return unsafe { sq_throwerror(v, msg.as_ptr()) }.0;
+                return throw_error(v, &msg);
             }
         };
 
@@ -228,10 +228,7 @@ where
 
     match result {
         Ok(ret) => ret,
-        Err(_) => {
-            let msg = c"panic in native function";
-            unsafe { sq_throwerror(v, msg.as_ptr()) }.0
-        }
+        Err(_) => throw_error(v, c"panic in native function"),
     }
 }
 
@@ -342,14 +339,8 @@ impl Squirrel {
         A: for<'a> FromArgs<'a>,
         R: IntoSquirrel<'vm>,
     {
-        let fn_ptr: *mut F = Box::into_raw(Box::new(f));
-
-        let user_data = unsafe { sq_newuserdata(self.vm, size_of::<*mut F>() as _) };
-
-        unsafe { *(user_data as *mut *mut F) = fn_ptr };
-
-        unsafe { sq_setreleasehook(self.vm, -1, Some(closure_release_hook::<F>)) };
-
+        let upvalue = UserData::new(self, f);
+        upvalue.0.push_into_stack();
         unsafe { sq_newclosure(self.vm, Some(closure_trampoline::<'vm, F, A, R>), 1) };
 
         let nc = NativeClosure(Object::from_stack(-1, self));

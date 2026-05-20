@@ -11,7 +11,7 @@ use squirrels_sys::{
 };
 
 use crate::{
-    Error, FromSquirrel as _, Object, Result, Squirrel, errors::SqResultExt as _,
+    Error, FromSquirrel as _, Integer, Object, Result, Squirrel, errors::SqResultExt as _,
     traits::impl_object_traits,
 };
 
@@ -21,9 +21,15 @@ pub struct UserData<'vm>(pub(crate) Object<'vm>);
 
 impl_object_traits!(UserData, tagSQObjectType_OT_USERDATA, "userdata");
 
-struct Payload<T: 'static> {
+pub(crate) struct Payload<T: 'static> {
     type_id: TypeId,
     cell: RefCell<T>,
+}
+
+impl<T: 'static> Payload<T> {
+    pub(crate) fn cell(&self) -> &RefCell<T> {
+        &self.cell
+    }
 }
 
 fn userdata_tag() -> SQUserPointer {
@@ -63,6 +69,27 @@ impl<'vm> UserData<'vm> {
         sq.pop(1);
 
         user_data
+    }
+
+    pub(crate) unsafe fn payload_from_stack<T: 'static>(
+        sq: &Squirrel,
+        idx: Integer,
+    ) -> Option<&Payload<T>> {
+        let mut buf: SQUserPointer = std::ptr::null_mut();
+        let mut tag: SQUserPointer = std::ptr::null_mut();
+        if unsafe { sq_getuserdata(sq.vm, -1, &mut buf, &mut tag) }.is_error() {
+            return None;
+        }
+
+        if tag != userdata_tag() {
+            return None;
+        }
+
+        let payload = unsafe { &*(*(buf as *const *const Payload<T>)) };
+        if payload.type_id != TypeId::of::<T>() {
+            return None;
+        }
+        Some(payload)
     }
 
     fn payload<T: 'static>(&self) -> Result<&Payload<T>> {
