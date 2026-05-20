@@ -31,13 +31,13 @@ use crate::{
 /// root.set("key", 1).unwrap();
 ///
 /// let child = Table::new(&sq);
-/// child.set_delegate(Some(root.clone())).unwrap();
+/// child.set_delegate(Some(&root)).unwrap();
 ///
 /// // Fields not defined on `child` are looked up on `root`.
 /// assert_eq!(child.get::<_, Integer>("key").unwrap(), 1);
 ///
 /// let grandchild = Table::new(&sq);
-/// grandchild.set_delegate(Some(child)).unwrap();
+/// grandchild.set_delegate(Some(&child)).unwrap();
 ///
 /// // Lookup is performed transitively on each parent of the delegate chain.
 /// assert_eq!(grandchild.get::<_, Integer>("key").unwrap(), 1);
@@ -65,12 +65,12 @@ impl<'vm> Table<'vm> {
     /// Creates a new empty `Table`.
     pub fn new(sq: &'vm Squirrel) -> Table<'vm> {
         unsafe { sq_newtable(sq.vm) };
-        let obj = unsafe { Self::from_stack(-1, sq) };
+        let obj = unsafe { Self::from_stack(-1, sq) }.expect("expecting the table we just created");
         sq.pop(1);
-        obj.expect("expecting the table we just created")
+        obj
     }
 
-    /// Creates a new empty `Table` with an initial capacity.
+    /// Creates a new empty `Table` with an initial capacity in slots.
     ///
     /// This prevents unnecessary rehashing when the number of slots required is known
     /// at creation time.
@@ -78,15 +78,15 @@ impl<'vm> Table<'vm> {
     /// # Panics
     ///
     /// Panics if `initial_capacity` is negative.
-    pub fn with_capacity(sq: &'vm Squirrel, initial_capacity: Integer) -> Table<'vm> {
+    pub fn with_capacity(sq: &'vm Squirrel, slots: Integer) -> Table<'vm> {
         assert!(
-            initial_capacity >= 0,
-            "Table::with_capacity: initial_capacity must be non-negative, got {initial_capacity}"
+            slots >= 0,
+            "Table::with_capacity: initial_capacity must be non-negative, got {slots}"
         );
-        unsafe { sq_newtableex(sq.vm, initial_capacity) };
-        let obj = unsafe { Self::from_stack(-1, sq) };
+        unsafe { sq_newtableex(sq.vm, slots) };
+        let obj = unsafe { Self::from_stack(-1, sq) }.expect("expecting the table we just created");
         sq.pop(1);
-        obj.expect("expecting the table we just created")
+        obj
     }
 
     /// Gets the value associated to `key` from the table.
@@ -308,7 +308,12 @@ impl<'vm> Table<'vm> {
         self.0.push_into_stack();
         unsafe { key.push_into_stack(self.0.sq) };
 
-        !unsafe { sq_rawget(self.0.sq.vm, -2) }.is_error()
+        if unsafe { sq_rawget(self.0.sq.vm, -2) }.is_error() {
+            self.0.sq.pop(1);
+            return false;
+        }
+        self.0.sq.pop(2);
+        true
     }
 
     /// Iterate on the table's slots.
@@ -324,9 +329,12 @@ impl<'vm> Table<'vm> {
     /// Sets or clears this table's delegate.
     ///
     /// Fails if assigning this delegate would create a reference cycle.
-    pub fn set_delegate(&self, delegate: Option<Table<'vm>>) -> CallResult<'vm, ()> {
+    pub fn set_delegate(&self, delegate: Option<&Table<'vm>>) -> CallResult<'vm, ()> {
         self.0.push_into_stack();
-        unsafe { delegate.push_into_stack(self.0.sq) };
+        match delegate {
+            None => unsafe { ().push_into_stack(self.0.sq) },
+            Some(d) => d.0.push_into_stack(),
+        }
 
         // sq_setdelegate does not pop on error
         unsafe { sq_setdelegate(self.0.sq.vm, -2) }.to_runtime_error(self.0.sq, 2)?;
@@ -427,11 +435,29 @@ mod tests {
     use crate::{CallError, Integer, Squirrel, String};
 
     #[test]
+    fn table_new() {
+        let sq = Squirrel::new(1024);
+        let t = Table::new(&sq);
+        assert_eq!(t.len(), 0);
+        assert!(t.is_empty());
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn table_with_capacity() {
+        let sq = Squirrel::new(1024);
+        let t = Table::with_capacity(&sq, 3);
+        assert_eq!(t.len(), 0);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
     fn table_get() {
         let sq = Squirrel::new(1024);
         sq.eval::<()>("a <- 1").unwrap();
         let v: Integer = sq.root_table().get("a").unwrap();
-        assert_eq!(v, 1)
+        assert_eq!(v, 1);
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
@@ -440,6 +466,7 @@ mod tests {
         sq.root_table().set("a", 24).unwrap();
         let v: Integer = sq.eval("return a").unwrap();
         assert_eq!(v, 24);
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
@@ -449,6 +476,7 @@ mod tests {
         sq.eval::<()>("y <- x * 2").unwrap();
         let y: Integer = sq.root_table().get("y").unwrap();
         assert_eq!(y, 20);
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
@@ -459,6 +487,139 @@ mod tests {
         // null is not a valid key, so this should fail.
         let err = root_table.set((), 1).unwrap_err();
         assert!(matches!(err, CallError::Runtime(_)));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn table_assign() {
+        let sq = Squirrel::new(1024);
+        let t = Table::new(&sq);
+        t.set("x", 10).unwrap();
+        t.assign("x", 20).unwrap();
+        let x: Integer = t.get("x").unwrap();
+        assert_eq!(x, 20);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn table_assign_err() {
+        let sq = Squirrel::new(1024);
+        let t = Table::new(&sq);
+        let err = t.assign("x", 20).unwrap_err();
+        assert!(matches!(err, CallError::Runtime(_)));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn table_delete() {
+        let sq = Squirrel::new(1024);
+        let t = Table::new(&sq);
+        t.set("x", 10).unwrap();
+        let v: Integer = t.delete("x").unwrap();
+        assert_eq!(v, 10);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn table_delete_missing_key() {
+        let sq = Squirrel::new(1024);
+        let t = Table::new(&sq);
+        let err = t.delete::<_, Integer>("x").unwrap_err();
+        assert!(matches!(err, CallError::Runtime(_)));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn table_clear() {
+        let sq = Squirrel::new(1024);
+        let t: Table = sq.eval("return {a=1, b=2}").unwrap();
+        assert_eq!(t.len(), 2);
+        t.clear();
+        assert_eq!(t.len(), 0);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn table_raw_get() {
+        let sq = Squirrel::new(1024);
+        sq.eval::<()>("a <- 1").unwrap();
+        let v: Integer = sq.root_table().raw_get("a").unwrap();
+        assert_eq!(v, 1);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn table_raw_get_missing_key() {
+        let sq = Squirrel::new(1024);
+        let t = Table::new(&sq);
+        let err = t.raw_get::<_, Integer>("a").unwrap_err();
+        assert!(matches!(err, CallError::Runtime(_)));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn table_raw_set() {
+        let sq = Squirrel::new(1024);
+        sq.root_table().raw_set("a", 24).unwrap();
+        let v: Integer = sq.eval("return a").unwrap();
+        assert_eq!(v, 24);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn table_raw_delete() {
+        let sq = Squirrel::new(1024);
+        let t = Table::new(&sq);
+        t.set("x", 10).unwrap();
+        let v: Option<Integer> = t.raw_delete("x").unwrap();
+        assert_eq!(v, Some(10));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn table_set_delegate() {
+        let sq = Squirrel::new(1024);
+        let t = Table::new(&sq);
+        let delegate = Table::new(&sq);
+        t.set_delegate(Some(&delegate)).unwrap();
+
+        delegate.set("x", 10).unwrap();
+        let x: Integer = t.get("x").unwrap();
+        assert_eq!(x, 10);
+
+        let raw_x_err = t.raw_get::<_, Integer>("x").unwrap_err();
+        assert!(matches!(raw_x_err, CallError::Runtime(_)));
+
+        t.set_delegate(None).unwrap();
+        assert_eq!(t.get_delegate(), None);
+
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn table_get_delegate() {
+        let sq = Squirrel::new(1024);
+        let t = Table::new(&sq);
+        assert_eq!(t.get_delegate(), None);
+
+        let delegate = Table::new(&sq);
+        t.set_delegate(Some(&delegate)).unwrap();
+
+        assert_eq!(t.get_delegate(), Some(delegate));
+
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn table_contains_key() {
+        let sq = Squirrel::new(1024);
+        let t = Table::new(&sq);
+        assert!(!t.contains_key("x"));
+        assert_eq!(sq.stack_depth(), 0);
+
+        t.set("x", 1.0).unwrap();
+        assert!(t.contains_key("x"));
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
@@ -484,6 +645,20 @@ mod tests {
                 ("c".to_string(), 3),
             ]
         );
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn table_clone_value() {
+        let sq = Squirrel::new(1024);
+        let t = Table::new(&sq);
+        let t2 = t.clone_value().unwrap();
+
+        assert_ne!(t, t2);
+
+        t.set("x", 1).unwrap();
+
+        assert!(!t2.contains_key("x"));
         assert_eq!(sq.stack_depth(), 0);
     }
 }
