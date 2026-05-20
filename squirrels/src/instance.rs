@@ -1,10 +1,11 @@
 use squirrels_sys::{
-    sq_get, sq_getclass, sq_instanceof, sq_rawget, sq_rawset, sq_set, tagSQObjectType_OT_INSTANCE,
+    SQBool, sq_get, sq_getclass, sq_instanceof, sq_rawget, sq_rawset, sq_set,
+    tagSQObjectType_OT_INSTANCE,
 };
 
 use crate::{
-    CallError, CallResult, Class, Error, FromSquirrel, IntoArgs, IntoSquirrel, Object, Squirrel,
-    Value, errors::SqResultExt as _, traits::impl_object_traits,
+    CallError, CallResult, Class, Error, FromSquirrel, IntoArgs, IntoSquirrel, Object, Value,
+    errors::SqResultExt as _, traits::impl_object_traits,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -32,10 +33,14 @@ impl<'vm> Instance<'vm> {
     pub fn instance_of(&self, class: &Class<'vm>) -> bool {
         self.0.sq.assert_same_vm(class.0.sq);
 
-        self.0.push_into_stack();
         class.0.push_into_stack();
+        self.0.push_into_stack();
 
         let b = unsafe { sq_instanceof(self.0.sq.vm) };
+        assert!(
+            b != (0 as SQBool).wrapping_sub(1),
+            "sq_instanceof failed on {self:?} (class: {class:?}"
+        );
         self.0.sq.pop(2);
         b != 0
     }
@@ -142,22 +147,152 @@ impl<'vm> Instance<'vm> {
     // * sq_getreleasehook
 }
 
-#[test]
-fn instance_class() {
-    let sq = Squirrel::new(1024);
-    let class = Class::new(&sq);
-    let instance = class.raw_instantiate();
+#[cfg(test)]
+mod tests {
+    use crate::{CallError, Class, Error, Integer, Squirrel};
 
-    assert_eq!(instance.class(), class);
-    assert_eq!(sq.stack_depth(), 0);
-}
+    fn class_with_field<'vm>(sq: &'vm Squirrel, key: &str, value: Integer) -> Class<'vm> {
+        let class = Class::new(sq);
+        class.new_slot(key, value, false).unwrap();
+        class
+    }
 
-#[test]
-fn instance_instance_of() {
-    let sq = Squirrel::new(1024);
-    let class = Class::new(&sq);
-    let instance = class.raw_instantiate();
+    #[test]
+    fn instance_class() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        let instance = class.raw_instantiate();
 
-    assert!(instance.instance_of(&class));
-    assert_eq!(sq.stack_depth(), 0);
+        assert_eq!(instance.class(), class);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn instance_instance_of() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        let instance = class.raw_instantiate();
+
+        assert!(instance.instance_of(&class));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn instance_instance_of_other_class() {
+        let sq = Squirrel::new(1024);
+        let class_a = Class::new(&sq);
+        let class_b = Class::new(&sq);
+        let instance = class_a.raw_instantiate();
+
+        assert!(!instance.instance_of(&class_b));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn instance_get() {
+        let sq = Squirrel::new(1024);
+        let class = class_with_field(&sq, "x", 7);
+        let instance = class.raw_instantiate();
+
+        let v: Integer = instance.get("x").unwrap();
+        assert_eq!(v, 7);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn instance_get_missing_key() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        let instance = class.raw_instantiate();
+
+        let err = instance.get::<_, Integer>("nope").unwrap_err();
+        assert!(matches!(err, CallError::Runtime(_)));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn instance_set() {
+        let sq = Squirrel::new(1024);
+        let class = class_with_field(&sq, "x", 1);
+        let instance = class.raw_instantiate();
+
+        instance.set("x", 42).unwrap();
+        let v: Integer = instance.get("x").unwrap();
+        assert_eq!(v, 42);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn instance_set_missing_key() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        let instance = class.raw_instantiate();
+
+        let err = instance.set("nope", 1).unwrap_err();
+        assert!(matches!(err, CallError::Runtime(_)));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn instance_raw_get() {
+        let sq = Squirrel::new(1024);
+        let class = class_with_field(&sq, "x", 7);
+        let instance = class.raw_instantiate();
+
+        let v: Integer = instance.raw_get("x").unwrap();
+        assert_eq!(v, 7);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn instance_raw_get_missing_key() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        let instance = class.raw_instantiate();
+
+        let err = instance.raw_get::<_, Integer>("nope").unwrap_err();
+        assert!(matches!(err, CallError::Runtime(_)));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn instance_raw_set() {
+        let sq = Squirrel::new(1024);
+        let class = class_with_field(&sq, "x", 1);
+        let instance = class.raw_instantiate();
+
+        instance.raw_set("x", 99).unwrap();
+        let v: Integer = instance.raw_get("x").unwrap();
+        assert_eq!(v, 99);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn instance_call_method() {
+        let sq = Squirrel::new(1024);
+        let class: Class = sq
+            .eval("return class { function double(n) { return n * 2 } }")
+            .unwrap();
+        let instance = class.raw_instantiate();
+
+        let v: Integer = instance.call_method("double", (21,)).unwrap();
+        assert_eq!(v, 42);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn instance_call_method_not_a_closure() {
+        let sq = Squirrel::new(1024);
+        let class = class_with_field(&sq, "x", 1);
+        let instance = class.raw_instantiate();
+
+        let err = instance.call_method::<_, _, ()>("x", ()).unwrap_err();
+        assert!(matches!(
+            err,
+            CallError::Other(Error::Type {
+                expected: "closure"
+            })
+        ));
+        assert_eq!(sq.stack_depth(), 0);
+    }
 }

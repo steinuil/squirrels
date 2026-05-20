@@ -1,6 +1,6 @@
 use squirrels_sys::{
     HSQMEMBERHANDLE, SQFalse, SQTrue, sq_createinstance, sq_get, sq_getbase, sq_getmemberhandle,
-    sq_newclass, sq_newmember, sq_newslot, sq_rawget, sq_rawnewmember, sq_rawset, sq_set,
+    sq_newclass, sq_newmember, sq_newslot, sq_rawget, sq_rawnewmember, sq_rawset,
     sq_setclassudsize, tagSQObjectType_OT_CLASS,
 };
 
@@ -85,7 +85,7 @@ impl<'vm> Class<'vm> {
     ///
     /// If `is_static` is `true`, the member is created as a static member.
     ///
-    /// Fails if `key` is `null` or already exists on the class.
+    /// Fails if `key` is `null`.
     pub fn new_member<K, V, A>(
         &self,
         key: K,
@@ -127,7 +127,7 @@ impl<'vm> Class<'vm> {
     ///
     /// If `is_static` is `true`, the member is created as a static member.
     ///
-    /// Fails if `key` is `null` or already exists on the class.
+    /// Fails if `key` is `null`.
     pub fn raw_new_member<K, V, A>(
         &self,
         key: K,
@@ -192,7 +192,20 @@ impl<'vm> Class<'vm> {
 
     /// Gets the value associated to `key` on this class.
     ///
-    /// Fails if `key` is not found.
+    /// # Metamethods and default delegate
+    ///
+    /// If `key` is not set directly on this class, the lookup falls back to
+    /// the class's `_get` metamethod (if defined), and then to the
+    /// [default class delegate](http://www.squirrel-lang.org/squirreldoc/reference/language/builtin_functions.html#class)
+    /// which exposes built-in methods like `getattributes`, `rawget`, `rawin`,
+    /// `newmember`, and `instance`.
+    ///
+    /// Use the [`raw_get`](Self::raw_get) method to bypass the fallback chain.
+    ///
+    /// # Errors
+    ///
+    /// Fails if `key` is not found on the class, its `_get` metamethod, nor the
+    /// default class delegate, or if a `_get` metamethod throws an error.
     pub fn get<K, V>(&self, key: K) -> CallResult<'vm, V>
     where
         K: IntoSquirrel<'vm>,
@@ -206,25 +219,6 @@ impl<'vm> Class<'vm> {
         let val = unsafe { V::from_stack(-1, self.0.sq) };
         self.0.sq.pop(2);
         Ok(val?)
-    }
-
-    /// Sets the value associated to an already existing `key` on this class.
-    ///
-    /// Fails if `key` is `null` or not found.
-    pub fn set<K, V>(&self, key: K, value: V) -> CallResult<'vm, ()>
-    where
-        K: IntoSquirrel<'vm>,
-        V: IntoSquirrel<'vm>,
-    {
-        self.0.push_into_stack();
-        unsafe { key.push_into_stack(self.0.sq) };
-        unsafe { value.push_into_stack(self.0.sq) };
-
-        // sq_set only pops k+v on success
-        unsafe { sq_set(self.0.sq.vm, -3) }.to_runtime_error(self.0.sq, 3)?;
-
-        self.0.sq.pop(1);
-        Ok(())
     }
 
     /// Gets the value associated to `key` on this class, bypassing metamethods.
@@ -314,39 +308,210 @@ pub struct MemberHandle<'vm> {
     class: Class<'vm>,
 }
 
-#[test]
-fn class_new() {
-    let sq = Squirrel::new(1024);
-    Class::new(&sq);
-    assert_eq!(sq.stack_depth(), 0);
-}
+#[cfg(test)]
+mod tests {
+    use crate::{CallError, Class, Integer, Squirrel, String, Value};
 
-#[test]
-fn class_with_base() {
-    let sq = Squirrel::new(1024);
-    let base = Class::new(&sq);
-    let class = Class::with_base(&base);
+    #[test]
+    fn class_new() {
+        let sq = Squirrel::new(1024);
+        Class::new(&sq);
+        assert_eq!(sq.stack_depth(), 0);
+    }
 
-    assert_eq!(base, class.base().unwrap());
-    assert_eq!(sq.stack_depth(), 0);
-}
+    #[test]
+    fn class_with_base() {
+        let sq = Squirrel::new(1024);
+        let base = Class::new(&sq);
+        let class = Class::with_base(&base);
 
-#[test]
-fn class_instantiate() {
-    let sq = Squirrel::new(1024);
-    let class = Class::new(&sq);
-    let instance = class.instantiate(()).unwrap();
+        assert_eq!(base, class.base().unwrap());
+        assert_eq!(sq.stack_depth(), 0);
+    }
 
-    assert!(instance.instance_of(&class));
-    assert_eq!(sq.stack_depth(), 0);
-}
+    #[test]
+    fn class_base_none() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        assert_eq!(class.base(), None);
+        assert_eq!(sq.stack_depth(), 0);
+    }
 
-#[test]
-fn class_raw_instantiate() {
-    let sq = Squirrel::new(1024);
-    let class = Class::new(&sq);
-    let instance = class.raw_instantiate();
+    #[test]
+    fn class_instantiate() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        let instance = class.instantiate(()).unwrap();
 
-    assert!(instance.instance_of(&class));
-    assert_eq!(sq.stack_depth(), 0);
+        assert!(instance.instance_of(&class));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn class_instantiate_constructor_throws() {
+        let sq = Squirrel::new(1024);
+        let class: Class = sq
+            .eval("return class { constructor() { throw \"boom\" } }")
+            .unwrap();
+        let err = class.instantiate(()).unwrap_err();
+        assert!(matches!(err, CallError::Runtime(Value::String(_))));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn class_raw_instantiate() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        let instance = class.raw_instantiate();
+
+        assert!(instance.instance_of(&class));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn class_new_member() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        class.new_member("x", 10, (), false).unwrap();
+
+        let v: Integer = class.get("x").unwrap();
+        assert_eq!(v, 10);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn class_new_member_static() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        class.new_member("X", 99, (), true).unwrap();
+
+        let v: Integer = class.get("X").unwrap();
+        assert_eq!(v, 99);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn class_new_member_null_key() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        let err = class.new_member((), 1, (), false).unwrap_err();
+        assert!(matches!(err, CallError::Runtime(_)));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn class_raw_new_member() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        class.raw_new_member("x", 10, (), false).unwrap();
+
+        let v: Integer = class.get("x").unwrap();
+        assert_eq!(v, 10);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn class_raw_new_member_null_key() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        let err = class.raw_new_member((), 1, (), false).unwrap_err();
+        assert!(matches!(err, CallError::Runtime(_)));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn class_new_slot() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        class.new_slot("x", 5, false).unwrap();
+
+        let v: Integer = class.get("x").unwrap();
+        assert_eq!(v, 5);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn class_new_slot_null_key() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        let err = class.new_slot((), 1, false).unwrap_err();
+        assert!(matches!(err, CallError::Runtime(_)));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn class_get_missing_key() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        let err = class.get::<_, Integer>("nope").unwrap_err();
+        assert!(matches!(err, CallError::Runtime(_)));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn class_raw_get() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        class.new_slot("x", 7, false).unwrap();
+
+        let v: Integer = class.raw_get("x").unwrap();
+        assert_eq!(v, 7);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn class_raw_get_missing_key() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        let err = class.raw_get::<_, Integer>("nope").unwrap_err();
+        assert!(matches!(err, CallError::Runtime(_)));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn class_raw_set() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        class.new_slot("x", 1, false).unwrap();
+        class.raw_set("x", 99).unwrap();
+
+        let v: Integer = class.raw_get("x").unwrap();
+        assert_eq!(v, 99);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn class_member_handle() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        class.new_slot("x", 1, false).unwrap();
+
+        class.member_handle(String::new(&sq, "x")).unwrap();
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn class_member_handle_missing() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        let res = class.member_handle(String::new(&sq, "nope"));
+        assert!(matches!(res, Err(CallError::Runtime(_))));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn class_set_instance_user_data_size() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        class.set_instance_user_data_size(16).unwrap();
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    #[should_panic]
+    fn class_set_instance_user_data_size_negative() {
+        let sq = Squirrel::new(1024);
+        let class = Class::new(&sq);
+        let _ = class.set_instance_user_data_size(-1);
+    }
 }
