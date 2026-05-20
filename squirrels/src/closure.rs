@@ -167,4 +167,16 @@ mod tests {
         assert_eq!(v, 6);
         assert_eq!(sq.stack_depth(), 0);
     }
+
+    #[test]
+    fn nativeclosure_call_with() {
+        let sq = Squirrel::new(1024);
+        let f = sq.create_function(|(x, y): (Integer, Integer)| Ok(x + y));
+        let v: Integer = f.call((4, 5)).unwrap();
+        assert_eq!(v, 9);
+
+        let v: Integer = f.call_with((), (4, 5)).unwrap();
+        assert_eq!(v, 9);
+        assert_eq!(sq.stack_depth(), 0);
+    }
 }

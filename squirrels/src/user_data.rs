@@ -133,3 +133,89 @@ impl<'vm> UserData<'vm> {
         Ok(t)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::UserData;
+    use crate::{Error, Squirrel};
+
+    #[test]
+    fn user_data_new_and_borrow() {
+        let sq = Squirrel::new(1024);
+        let ud = UserData::new(&sq, 1_i32);
+        assert_eq!(*ud.borrow::<i32>().unwrap(), 1);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn user_data_borrow_mut() {
+        let sq = Squirrel::new(1024);
+        let ud = UserData::new(&sq, 1_i32);
+        *ud.borrow_mut::<i32>().unwrap() = 99;
+        assert_eq!(*ud.borrow::<i32>().unwrap(), 99);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn user_data_borrow_wrong_type() {
+        let sq = Squirrel::new(1024);
+        let ud = UserData::new(&sq, 1_i32);
+        let err = ud.borrow::<u64>().unwrap_err();
+        assert!(matches!(err, Error::Type { .. }));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn user_data_borrow_mut_wrong_type() {
+        let sq = Squirrel::new(1024);
+        let ud = UserData::new(&sq, 1_i32);
+        let err = ud.borrow_mut::<u64>().unwrap_err();
+        assert!(matches!(err, Error::Type { .. }));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn user_data_borrow_mut_while_borrowed() {
+        let sq = Squirrel::new(1024);
+        let ud = UserData::new(&sq, 1_i32);
+        let _b = ud.borrow::<i32>().unwrap();
+        let err = ud.borrow_mut::<i32>().unwrap_err();
+        assert!(matches!(err, Error::Type { .. }));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn user_data_borrow_while_borrow_mut() {
+        let sq = Squirrel::new(1024);
+        let ud = UserData::new(&sq, 1_i32);
+        let _b = ud.borrow_mut::<i32>().unwrap();
+        let err = ud.borrow::<i32>().unwrap_err();
+        assert!(matches!(err, Error::Type { .. }));
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn user_data_clone_shares_payload() {
+        let sq = Squirrel::new(1024);
+        let ud = UserData::new(&sq, 7_i32);
+        let ud2 = ud.clone();
+        *ud.borrow_mut::<i32>().unwrap() = 123;
+        assert_eq!(*ud2.borrow::<i32>().unwrap(), 123);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn user_data_release_hook_drops_payload() {
+        use std::sync::Arc;
+
+        let sq = Squirrel::new(1024);
+        let payload = Arc::new(());
+        {
+            let _ud = UserData::new(&sq, payload.clone());
+            assert_eq!(Arc::strong_count(&payload), 2);
+        }
+        // Dropping the VM runs the release hook, which drops the boxed payload.
+        drop(sq);
+        assert_eq!(Arc::strong_count(&payload), 1);
+    }
+}
