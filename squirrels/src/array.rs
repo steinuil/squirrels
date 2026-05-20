@@ -34,8 +34,10 @@ impl<'vm> Array<'vm> {
         );
         unsafe { sq_newarray(sq.vm, size) };
 
-        unsafe { Self::from_stack(-1, sq) }
-            .unwrap_or_else(|_| panic!("sq_newarray did not push an Array"))
+        let arr = unsafe { Self::from_stack(-1, sq) }
+            .unwrap_or_else(|_| panic!("sq_newarray did not push an Array"));
+        sq.pop(1);
+        arr
     }
 
     /// Gets the value at position `idx` of the array.
@@ -244,6 +246,7 @@ mod tests {
         let sq = Squirrel::new(1024);
         let arr: Array<'_> = Array::new(&sq, 0);
         assert_eq!(arr.len(), 0);
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     /// Arrays in Squirrel are 0-based and not 1-cringed.
@@ -253,6 +256,15 @@ mod tests {
         let arr: Array<'_> = sq.eval("return [123, 456, 789]").unwrap();
         let v: Integer = arr.get(1).unwrap();
         assert_eq!(v, 456);
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn array_get_oob() {
+        let sq = Squirrel::new(1024);
+        let arr: Array<'_> = sq.eval("return [123]").unwrap();
+        let err = arr.get::<()>(1).unwrap_err();
+        assert!(matches!(err, CallError::Runtime(_)));
         assert_eq!(sq.stack_depth(), 0);
     }
 
@@ -312,6 +324,7 @@ mod tests {
         let sq = Squirrel::new(1024);
         let arr: Array<'_> = sq.eval("return [123, 456, 789]").unwrap();
         assert_eq!(arr.len(), 3);
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
@@ -324,6 +337,7 @@ mod tests {
         assert_eq!(v1, 50);
         assert_eq!(v2, 2);
         assert_eq!(arr.len(), 4);
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
@@ -334,6 +348,7 @@ mod tests {
         let v: Integer = arr.get(1).unwrap();
         assert_eq!(v, 3);
         assert_eq!(arr.len(), 2);
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
@@ -343,6 +358,7 @@ mod tests {
         arr.reverse();
         let v: Integer = arr.get(0).unwrap();
         assert_eq!(v, 3);
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
@@ -351,6 +367,7 @@ mod tests {
         let arr: Array<'_> = sq.eval("return [1, 2, 3]").unwrap();
         arr.clear();
         assert_eq!(arr.len(), 0);
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
@@ -361,6 +378,7 @@ mod tests {
         assert_eq!(arr.len(), 5);
         let v: Value<'_> = arr.get(4).unwrap();
         assert_eq!(v, Value::Null);
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
@@ -369,6 +387,7 @@ mod tests {
         let arr: Array<'_> = sq.eval("return [1, 2, 3]").unwrap();
         arr.resize(2).unwrap();
         assert_eq!(arr.len(), 2);
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
@@ -380,6 +399,7 @@ mod tests {
             .collect::<CallResult<'_, Vec<Integer>>>()
             .unwrap();
         assert_eq!(&vals, &[1, 2, 3]);
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
@@ -394,6 +414,19 @@ mod tests {
             &vals,
             &[Value::Integer(1), Value::Integer(2), Value::Integer(3)]
         );
+        assert_eq!(sq.stack_depth(), 0);
+    }
+
+    #[test]
+    fn array_iter_err() {
+        let sq = Squirrel::new(1024);
+        let arr: Array<'_> = sq.eval("return [1, \"test\", 3]").unwrap();
+        let err = arr
+            .iter()
+            .collect::<CallResult<'_, Vec<Integer>>>()
+            .unwrap_err();
+        assert!(matches!(err, CallError::Other(_)));
+        assert_eq!(sq.stack_depth(), 0);
     }
 
     #[test]
@@ -405,5 +438,6 @@ mod tests {
 
         assert_eq!(arr1.len(), 0);
         assert_eq!(arr2.len(), 3);
+        assert_eq!(sq.stack_depth(), 0);
     }
 }
